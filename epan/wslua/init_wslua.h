@@ -11,6 +11,7 @@
 #define __INIT_WSLUA_H__
 
 #include "ws_symbol_export.h"
+#include <epan/register.h> /* for register_cb */
 
 #include "epan/register.h"
 

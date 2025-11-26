@@ -17,6 +17,7 @@
 
 #include "wslua.h"
 #include "init_wslua.h"
+#include "wslua_debugger.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -877,6 +878,10 @@ static bool lua_load_plugin_script(const char* name,
                          lua_load_plugin(filename)) {
         wslua_add_plugin(name, get_current_plugin_version(), filename);
         clear_current_plugin_version();
+
+        /* Notify the debugger that a script has been loaded */
+        wslua_debugger_notify_script_loaded(filename);
+
         return true;
     }
     return false;
@@ -1737,6 +1742,8 @@ void wslua_init(register_cb cb, void *client_data, const char* app_env_var_prefi
         lua_app_env_var_prefix = app_env_var_prefix;
     }
 
+    wslua_debugger_init(L);
+
     lua_atpanic(L,wslua_panic);
 
     /*
@@ -1978,6 +1985,19 @@ void wslua_reload_plugins (register_cb cb, void *client_data, const char* app_en
     if (ops->close_dialogs)
         ops->close_dialogs();
 
+    /*
+     * Notify the debugger that a reload is about to happen.
+     *
+     * CRITICAL: This must be called BEFORE wslua_cleanup() and the
+     * subsequent wslua_init(). The debugger UI needs to reload all
+     * open script files from disk BEFORE Lua executes any code.
+     *
+     * This ensures that if a breakpoint is hit during the reload,
+     * the debugger displays the current version of the script
+     * (which the user may have edited since the last load).
+     */
+    wslua_debugger_notify_reload();
+
     wslua_deregister_heur_dissectors(L);
     wslua_deregister_protocols(L);
     wslua_deregister_dissector_tables(L);
@@ -1989,6 +2009,15 @@ void wslua_reload_plugins (register_cb cb, void *client_data, const char* app_en
 
     wslua_cleanup();
     wslua_init(cb, client_data, app_env_var_prefix);    /* reinitialize */
+
+    /*
+     * Notify the debugger that the reload has completed.
+     *
+     * This is called AFTER wslua_init() has loaded all plugins.
+     * The debugger UI can now refresh its file tree with the
+     * newly loaded scripts.
+     */
+    wslua_debugger_notify_post_reload();
 }
 
 void wslua_cleanup(void) {

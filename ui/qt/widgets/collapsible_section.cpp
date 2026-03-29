@@ -116,12 +116,12 @@ void CollapsibleSection::onToggle(bool checked)
 
         if (splitter)
         {
-            int index = splitter->indexOf(this);
-            if (index >= 0)
+            int idx = splitter->indexOf(this);
+            if (idx >= 0)
             {
                 QList<int> sizes = splitter->sizes();
                 // Restore saved height or use reasonable default
-                sizes[index] = qMax(savedHeight, headerHeight() + 50);
+                sizes[idx] = qMax(savedHeight, headerHeight() + 50);
                 splitter->setSizes(sizes);
             }
         }
@@ -131,13 +131,13 @@ void CollapsibleSection::onToggle(bool checked)
         // Collapsing - save current height first
         if (splitter)
         {
-            int index = splitter->indexOf(this);
-            if (index >= 0)
+            int idx = splitter->indexOf(this);
+            if (idx >= 0)
             {
                 QList<int> sizes = splitter->sizes();
-                if (sizes[index] > headerHeight())
+                if (sizes[idx] > headerHeight())
                 {
-                    savedHeight = sizes[index];
+                    savedHeight = sizes[idx];
                 }
             }
         }

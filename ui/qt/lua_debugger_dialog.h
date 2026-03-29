@@ -139,7 +139,7 @@ class LuaDebuggerDialog : public GeometryStateDialog
     /** @brief Evaluate selected text from the code view. */
     void evaluateSelection(const QString &text);
     /** @brief Handle theme selection changes from the Settings section. */
-    void onThemeChanged(int index);
+    void onThemeChanged(int idx);
 
   private:
     Ui::LuaDebuggerDialog *ui;
@@ -291,6 +291,8 @@ class LuaDebuggerDialog : public GeometryStateDialog
     /** @brief Update the enabled state of the eval panel based on debugger
      * state. */
     void updateEvalPanelState();
+    /** @brief Update all widgets based on the current debugger state. */
+    void updateWidgets();
     /** @brief Create the collapsible sections and their content widgets. */
     void createCollapsibleSections();
 

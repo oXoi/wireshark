@@ -149,8 +149,8 @@ wslua_debugger_breakpoint_matches(const wslua_breakpoint_t *breakpoint,
 static void wslua_debug_hook(lua_State *L, lua_Debug *debug_info);
 static void wslua_debugger_update_hook(void);
 static void remove_breakpoint_at(unsigned idx);
-static int64_t wslua_debugger_count_table_entries(lua_State *L, int index);
-static char *wslua_debugger_describe_value(lua_State *L, int index);
+static int64_t wslua_debugger_count_table_entries(lua_State *L, int idx);
+static char *wslua_debugger_describe_value(lua_State *L, int idx);
 
 /**
  * @brief Ensure breakpoints array is initialized.
@@ -247,7 +247,10 @@ void wslua_debugger_init(lua_State *L)
  * @brief Check if debugger is enabled.
  * @return true if enabled, false otherwise.
  */
-bool wslua_debugger_is_enabled(void) { return debugger.enabled; }
+bool wslua_debugger_is_enabled(void)
+{
+    return debugger.enabled;
+}
 
 /**
  * @brief Update the Lua debug hook based on state.
@@ -877,9 +880,9 @@ static int wslua_debugger_abs_index(lua_State *L, int idx)
 #endif
 }
 
-static int64_t wslua_debugger_count_table_entries(lua_State *L, int index)
+static int64_t wslua_debugger_count_table_entries(lua_State *L, int idx)
 {
-    const int tableIndex = wslua_debugger_abs_index(L, index);
+    const int tableIndex = wslua_debugger_abs_index(L, idx);
     int64_t count = 0;
     lua_pushnil(L);
     while (lua_next(L, tableIndex) != 0)
@@ -890,27 +893,27 @@ static int64_t wslua_debugger_count_table_entries(lua_State *L, int index)
     return count;
 }
 
-static char *wslua_debugger_describe_value(lua_State *L, int index)
+static char *wslua_debugger_describe_value(lua_State *L, int idx)
 {
-    const int valueType = lua_type(L, index);
+    const int valueType = lua_type(L, idx);
     if (valueType == LUA_TFUNCTION)
     {
         return g_strdup("");
     }
     if (valueType == LUA_TTABLE)
     {
-        const int64_t entryCount = wslua_debugger_count_table_entries(L, index);
+        const int64_t entryCount = wslua_debugger_count_table_entries(L, idx);
         return g_strdup_printf("table[%" PRId64 "]", entryCount);
     }
-    const char *stringValue = luaL_tolstring(L, index, NULL);
+    const char *stringValue = luaL_tolstring(L, idx, NULL);
     char *result = g_strdup(stringValue ? stringValue : "");
     lua_pop(L, 1);
     return result;
 }
 
-static bool wslua_debugger_value_can_expand(lua_State *L, int index)
+static bool wslua_debugger_value_can_expand(lua_State *L, int idx)
 {
-    const int absIndex = wslua_debugger_abs_index(L, index);
+    const int absIndex = wslua_debugger_abs_index(L, idx);
     if (lua_type(L, absIndex) != LUA_TTABLE)
     {
         return false;
@@ -1137,22 +1140,22 @@ unsigned wslua_debugger_get_breakpoint_count(void)
 
 /**
  * @brief Get breakpoint at index.
- * @param index The index.
+ * @param idx The index.
  * @param file_path Output file path.
  * @param line Output line.
  * @param active Output active state.
  * @return true if found.
  */
-bool wslua_debugger_get_breakpoint(unsigned index, const char **file_path,
+bool wslua_debugger_get_breakpoint(unsigned idx, const char **file_path,
                                    int64_t *line, bool *active)
 {
     ensure_breakpoints_initialized();
 
-    if (index >= breakpoints_array->len)
+    if (idx >= breakpoints_array->len)
         return false;
 
     wslua_breakpoint_t *bp =
-        &g_array_index(breakpoints_array, wslua_breakpoint_t, index);
+        &g_array_index(breakpoints_array, wslua_breakpoint_t, idx);
     *file_path = bp->file_path;
     *line = bp->line;
     *active = bp->active;

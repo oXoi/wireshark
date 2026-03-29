@@ -214,13 +214,13 @@ extern "C"
 
     /**
      * @brief Get breakpoint details by index.
-     * @param index The index of the breakpoint.
+     * @param idx The index of the breakpoint.
      * @param file_path Output pointer for the file path.
      * @param line Output pointer for the line number.
      * @param active Output pointer for the active state.
      * @return true if found, false otherwise.
      */
-    WS_DLL_PUBLIC bool wslua_debugger_get_breakpoint(unsigned index,
+    WS_DLL_PUBLIC bool wslua_debugger_get_breakpoint(unsigned idx,
                                                      const char **file_path,
                                                      int64_t *line,
                                                      bool *active);

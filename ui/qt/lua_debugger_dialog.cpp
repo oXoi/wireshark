@@ -53,6 +53,9 @@
 #include "app/application_flavor.h"
 #include "wsutil/filesystem.h"
 #include <ui/qt/widgets/wireshark_file_dialog.h>
+#include <ui/qt/utils/qt_ui_utils.h>
+
+#define LUA_DEBUGGER_SETTINGS_FILE "lua_debugger.json"
 
 extern "C" void wslua_debugger_ui_callback(const char *file_path, int64_t line)
 {
@@ -66,7 +69,9 @@ extern "C" void wslua_debugger_ui_callback(const char *file_path, int64_t line)
 LuaDebuggerDialog *LuaDebuggerDialog::_instance = nullptr;
 int32_t LuaDebuggerDialog::currentTheme_ = WSLUA_DEBUGGER_THEME_AUTO;
 
-int32_t LuaDebuggerDialog::currentTheme() { return currentTheme_; }
+int32_t LuaDebuggerDialog::currentTheme() {
+    return currentTheme_;
+}
 
 namespace
 {
@@ -97,8 +102,7 @@ constexpr const char *Breakpoints = "breakpoints";
 // Tree Widget User Roles
 // ============================================================================
 constexpr qint32 FileTreePathRole = static_cast<qint32>(Qt::UserRole);
-constexpr qint32 FileTreeIsDirectoryRole =
-    static_cast<qint32>(Qt::UserRole + 1);
+constexpr qint32 FileTreeIsDirectoryRole = static_cast<qint32>(Qt::UserRole + 1);
 constexpr qint32 BreakpointFileRole = static_cast<qint32>(Qt::UserRole + 2);
 constexpr qint32 BreakpointLineRole = static_cast<qint32>(Qt::UserRole + 3);
 constexpr qint32 StackItemFileRole = static_cast<qint32>(Qt::UserRole + 4);
@@ -139,6 +143,8 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     _instance = this;
     setAttribute(Qt::WA_DeleteOnClose);
     ui->setupUi(this);
+    loadGeometry();
+
     lastOpenDirectory =
         QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
     if (lastOpenDirectory.isEmpty())
@@ -151,7 +157,7 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
 
     fileTree->setRootIsDecorated(true);
     fileTree->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    fileTree->header()->setStretchLastSection(false);
+    fileTree->header()->setStretchLastSection(true);
     fileTree->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
 
     // Compact toolbar styling with consistent icons
@@ -193,9 +199,6 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     enabledCheckBox->setChecked(wslua_debugger_is_enabled());
     ui->toolBar->insertWidget(firstAction, enabledCheckBox);
 
-    updateEnabledCheckboxIcon();
-    updateStatusLabel();
-
     connect(enabledCheckBox, &QCheckBox::toggled, this,
             &LuaDebuggerDialog::onDebuggerToggled);
     connect(ui->actionContinue, &QAction::triggered, this,
@@ -214,10 +217,10 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
 
     // Tab Widget
     connect(ui->codeTabWidget, &QTabWidget::tabCloseRequested,
-            [this](int index)
+            [this](int idx)
             {
-                QWidget *w = ui->codeTabWidget->widget(index);
-                ui->codeTabWidget->removeTab(index);
+                QWidget *w = ui->codeTabWidget->widget(idx);
+                ui->codeTabWidget->removeTab(idx);
                 delete w;
             });
 
@@ -319,22 +322,16 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
         }
     }
 
-    updateBreakpoints();
     refreshAvailableScripts();
     syncDebuggerToggleWithCore();
-    updateContinueActionState();
-    updateEvalPanelState();
-
-    /*
-     * Load saved window geometry.
-     */
-    loadGeometry();
+    updateWidgets();
 
     /*
      * Apply all settings from JSON file (theme, font, sections, splitters,
      * breakpoints). This is done after all widgets are created.
      */
     applyDialogSettings();
+    updateBreakpoints();
 }
 
 LuaDebuggerDialog::~LuaDebuggerDialog()
@@ -386,7 +383,7 @@ void LuaDebuggerDialog::createCollapsibleSections()
     fileTree->setHeaderLabels({tr("Files")});
     fileTree->setRootIsDecorated(false);
     filesSection->setContentWidget(fileTree);
-    filesSection->setExpanded(false);
+    filesSection->setExpanded(true);
     splitter->addWidget(filesSection);
 
     // --- Breakpoints Section ---
@@ -519,10 +516,7 @@ void LuaDebuggerDialog::handlePause(const char *file_path, int64_t line)
     }
 
     debuggerPaused = true;
-    updateEnabledCheckboxIcon();
-    updateStatusLabel();
-    updateContinueActionState();
-    updateEvalPanelState();
+    updateWidgets();
 
     updateStack();
     variablesTree->clear();
@@ -539,10 +533,7 @@ void LuaDebuggerDialog::handlePause(const char *file_path, int64_t line)
 void LuaDebuggerDialog::onContinue()
 {
     resumeDebuggerAndExitLoop();
-    updateEnabledCheckboxIcon();
-    updateStatusLabel();
-    updateContinueActionState();
-    updateEvalPanelState();
+    updateWidgets();
 }
 
 void LuaDebuggerDialog::onStep()
@@ -569,10 +560,7 @@ void LuaDebuggerDialog::onStep()
         loopToQuit->quit();
     }
 
-    updateEnabledCheckboxIcon();
-    updateStatusLabel();
-    updateContinueActionState();
-    updateEvalPanelState();
+    updateWidgets();
 }
 
 void LuaDebuggerDialog::onDebuggerToggled(bool checked)
@@ -587,10 +575,7 @@ void LuaDebuggerDialog::onDebuggerToggled(bool checked)
         debuggerPaused = false;
         clearPausedStateUi();
     }
-    updateEnabledCheckboxIcon();
-    updateStatusLabel();
-    updateContinueActionState();
-    updateEvalPanelState();
+    updateWidgets();
 }
 
 void LuaDebuggerDialog::closeEvent(QCloseEvent *event)
@@ -598,10 +583,8 @@ void LuaDebuggerDialog::closeEvent(QCloseEvent *event)
     resumeDebuggerAndExitLoop();
     /* Settings (including breakpoints) are persisted by storeDialogSettings()
      * which is called from the destructor */
-    updateEnabledCheckboxIcon();
-    updateStatusLabel();
-    updateContinueActionState();
-    updateEvalPanelState();
+    updateWidgets();
+
     GeometryStateDialog::closeEvent(event);
 }
 
@@ -1124,10 +1107,7 @@ void LuaDebuggerDialog::onCodeViewContextMenu(const QPoint &pos)
                     if (eventLoop)
                         eventLoop->quit();
                     debuggerPaused = false;
-                    updateEnabledCheckboxIcon();
-                    updateStatusLabel();
-                    updateContinueActionState();
-                    updateEvalPanelState();
+                    updateWidgets();
                     clearPausedStateUi();
                 });
 
@@ -1188,15 +1168,21 @@ void LuaDebuggerDialog::onMonospaceFontUpdated(const QFont &font)
     saveSettingsFile();
 }
 
-void LuaDebuggerDialog::onMainAppInitialized() { applyMonospaceFonts(); }
+void LuaDebuggerDialog::onMainAppInitialized()
+{
+    applyMonospaceFonts();
+}
 
-void LuaDebuggerDialog::onPreferencesChanged() { applyCodeViewThemes(); }
+void LuaDebuggerDialog::onPreferencesChanged()
+{
+    applyCodeViewThemes();
+}
 
-void LuaDebuggerDialog::onThemeChanged(int index)
+void LuaDebuggerDialog::onThemeChanged(int idx)
 {
     if (themeComboBox)
     {
-        int32_t theme = themeComboBox->itemData(index).toInt();
+        int32_t theme = themeComboBox->itemData(idx).toInt();
 
         /* Update static theme for CodeView syntax highlighting */
         currentTheme_ = theme;
@@ -1837,10 +1823,7 @@ void LuaDebuggerDialog::syncDebuggerToggleWithCore()
     bool previousState = enabledCheckBox->blockSignals(true);
     enabledCheckBox->setChecked(debuggerEnabled);
     enabledCheckBox->blockSignals(previousState);
-    updateEnabledCheckboxIcon();
-    updateStatusLabel();
-    updateContinueActionState();
-    updateEvalPanelState();
+    updateWidgets();
 }
 
 void LuaDebuggerDialog::updateEnabledCheckboxIcon()
@@ -1908,6 +1891,14 @@ void LuaDebuggerDialog::updateContinueActionState()
     ui->actionStep->setEnabled(allowContinue);
 }
 
+void LuaDebuggerDialog::updateWidgets()
+{
+    updateEnabledCheckboxIcon();
+    updateStatusLabel();
+    updateContinueActionState();
+    updateEvalPanelState();
+}
+
 void LuaDebuggerDialog::ensureDebuggerEnabledForActiveBreakpoints()
 {
     if (!wslua_debugger_is_enabled())
@@ -1962,10 +1953,7 @@ void LuaDebuggerDialog::onReloadLuaPlugins()
     if (debuggerPaused)
     {
         resumeDebuggerAndExitLoop();
-        updateEnabledCheckboxIcon();
-        updateStatusLabel();
-        updateContinueActionState();
-        updateEvalPanelState();
+        updateWidgets();
     }
 
     /*
@@ -2083,21 +2071,11 @@ void LuaDebuggerDialog::evaluateSelection(const QString &text)
     onEvaluate();
 }
 
-// ============================================================================
-// Qt-based JSON Settings Persistence (modeled after import_hexdump dialog)
-// ============================================================================
-
-#define LUA_DEBUGGER_SETTINGS_FILE "lua_debugger.json"
-
+// Qt-based JSON Settings Persistence
 void LuaDebuggerDialog::loadSettingsFile()
 {
-    // Build path: profile_dir/lua_debugger.json
-    gchar *profile_dir =
-        get_profile_dir(application_configuration_environment_prefix(),
-                        get_profile_name(), false);
-    QFileInfo fileInfo(QString::fromUtf8(profile_dir),
-                       QString(LUA_DEBUGGER_SETTINGS_FILE));
-    g_free(profile_dir);
+    char *lua_debugger_file = get_persconffile_path(LUA_DEBUGGER_SETTINGS_FILE, false, application_configuration_environment_prefix());
+    QFileInfo fileInfo(gchar_free_to_qstring(lua_debugger_file));
 
     QFile loadFile(fileInfo.filePath());
     if (!fileInfo.exists() || !fileInfo.isFile())
@@ -2115,13 +2093,8 @@ void LuaDebuggerDialog::loadSettingsFile()
 
 void LuaDebuggerDialog::saveSettingsFile()
 {
-    // Build path: profile_dir/lua_debugger.json
-    gchar *profile_dir =
-        get_profile_dir(application_configuration_environment_prefix(),
-                        get_profile_name(), false);
-    QFileInfo fileInfo(QString::fromUtf8(profile_dir),
-                       QString(LUA_DEBUGGER_SETTINGS_FILE));
-    g_free(profile_dir);
+    char *lua_debugger_file = get_persconffile_path(LUA_DEBUGGER_SETTINGS_FILE, false, application_configuration_environment_prefix());
+    QFileInfo fileInfo(gchar_free_to_qstring(lua_debugger_file));
 
     QFile saveFile(fileInfo.filePath());
     if (fileInfo.exists() && !fileInfo.isFile())
@@ -2153,9 +2126,9 @@ void LuaDebuggerDialog::applyDialogSettings()
     // Apply theme to combo box if it exists
     if (themeComboBox)
     {
-        int index = themeComboBox->findData(theme);
-        if (index >= 0)
-            themeComboBox->setCurrentIndex(index);
+        int idx = themeComboBox->findData(theme);
+        if (idx >= 0)
+            themeComboBox->setCurrentIndex(idx);
     }
 
     // Font settings are handled by effectiveMonospaceFont() which reads from

@@ -4054,7 +4054,7 @@ static int dissect_mac_mux_msg_ie(tvbuff_t *tvb, int offset, packet_info *pinfo,
 	int sublen;
 	unsigned length;
 
-	length = ((ctx && ctx->ie_length_present) ? ctx->ie_length : tvb_reported_length_remaining(tvb, offset));
+	length = (ctx->ie_length_present ? ctx->ie_length : tvb_reported_length_remaining(tvb, offset));
 	subtvb = tvb_new_subset_length(tvb, offset, length);
 	sublen = dissector_try_uint_with_data(dissector_table, ctx->ie_type, subtvb, pinfo, parent_tree, false, ctx);
 

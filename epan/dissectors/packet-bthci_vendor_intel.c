@@ -1016,6 +1016,9 @@ dissect_bthci_vendor_intel(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, 
         offset += 1;
 
         if (event_code == 0x0e /* Command Complete */) {
+            /* XXX - Is this correct? This was the previous behavior, but
+             * it's not what the Broadcom vendor variant (for which we
+             * have samples) does. */
             parameter_tvb = tvb_new_subset_length(tvb, offset, length + 4);
         } else {
             parameter_tvb = tvb_new_subset_length(tvb, offset, length);

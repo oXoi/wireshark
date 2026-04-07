@@ -275,9 +275,9 @@ void SoftwareUpdate::cleanup()
     #endif /* if */
 }
 
-#ifdef HAVE_SOFTWARE_UPDATE
 void SoftwareUpdate::startAutoCheck(int intervalSeconds)
 {
+#ifdef HAVE_SOFTWARE_UPDATE
     /* Skip update check for PortableApps installations */
     if (WorkspaceState::isPortableApplication()) {
         return;
@@ -296,8 +296,10 @@ void SoftwareUpdate::startAutoCheck(int intervalSeconds)
         updateCheckTimer_->start(msec);
     }
     updateMutex_.unlock();
-}
+#else
+    Q_UNUSED(intervalSeconds);
 #endif /* HAVE_SOFTWARE_UPDATE */
+}
 
 void SoftwareUpdate::stopAutoCheck()
 {

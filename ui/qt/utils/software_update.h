@@ -105,9 +105,7 @@ public:
 
     /**** Utility functions if the automatic update check needs to be manipulated through the UI ****/
 
-#if defined(HAVE_SOFTWARE_UPDATE)
     void startAutoCheck(int intervalSeconds = 0);
-#endif /* HAVE_SOFTWARE_UPDATE */
     void stopAutoCheck();
     bool isAutoCheckEnabled() const;
 

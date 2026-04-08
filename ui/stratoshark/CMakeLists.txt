@@ -674,18 +674,12 @@ add_custom_command(
 		${CMAKE_SOURCE_DIR}/AUTHORS
 )
 
-# Generate translatable strings from slides.json for lupdate
-add_custom_command(
-	OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/slide_tr_strings.cpp
-	COMMAND ${Python3_EXECUTABLE}
-		${CMAKE_SOURCE_DIR}/resources/json/generate_slide_translations.py
-		${CMAKE_SOURCE_DIR}/resources/json/slides.json
-		${CMAKE_CURRENT_BINARY_DIR}/slide_tr_strings.cpp
-		InfoBannerWidget
-	DEPENDS
-		${CMAKE_SOURCE_DIR}/resources/json/slides.json
-		${CMAKE_SOURCE_DIR}/resources/json/generate_slide_translations.py
-	COMMENT "Generating slide translation strings for lupdate"
+# Generate translatable strings from JSON data files for lupdate
+GENERATE_JSON_TR_STRINGS(
+	INPUT   ${CMAKE_SOURCE_DIR}/resources/json/slides.json
+	OUTPUT  ${CMAKE_CURRENT_BINARY_DIR}/slide_tr_strings.cpp
+	CONTEXT InfoBannerWidget
+	EXTRACT slides:tag,title,description,description_sub,body_text,button_label,url
 )
 
 # JSON data resources
@@ -792,7 +786,7 @@ add_library(ui_stratoshark OBJECT
 	${STRATOSHARK_UTILS_SRCS}
 	${STRATOSHARK_MODEL_SRCS}
 
-	# Generated translation markers for slides.json (lupdate only)
+	# Generated translation markers for JSON data (lupdate only)
 	${CMAKE_CURRENT_BINARY_DIR}/slide_tr_strings.cpp
 
 	# For AUTOUIC and AUTORCC.

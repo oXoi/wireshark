@@ -682,9 +682,19 @@ GENERATE_JSON_TR_STRINGS(
 	EXTRACT slides:tag,title,description,description_sub,body_text,button_label,url
 )
 
+GENERATE_JSON_TR_STRINGS(
+	INPUT   ${CMAKE_SOURCE_DIR}/resources/json/learn_card.json
+	OUTPUT  ${CMAKE_CURRENT_BINARY_DIR}/learn_card_tr_strings.cpp
+	CONTEXT LearnCardWidget
+	EXTRACT links:label,short_label,tooltip
+	        buttons:label,tooltip
+)
+
 # JSON data resources
 set(_json_qrc_files
 	"        <file alias=\"slides.json\">${CMAKE_SOURCE_DIR}/resources/json/slides.json</file>\n")
+string(APPEND _json_qrc_files
+	"        <file alias=\"learn_card.json\">${CMAKE_SOURCE_DIR}/resources/json/learn_card.json</file>\n")
 if(CUSTOM_SLIDES_JSON AND EXISTS "${CUSTOM_SLIDES_JSON}")
 	string(APPEND _json_qrc_files
 		"        <file alias=\"slides_custom.json\">${CUSTOM_SLIDES_JSON}</file>\n")
@@ -788,6 +798,7 @@ add_library(ui_stratoshark OBJECT
 
 	# Generated translation markers for JSON data (lupdate only)
 	${CMAKE_CURRENT_BINARY_DIR}/slide_tr_strings.cpp
+	${CMAKE_CURRENT_BINARY_DIR}/learn_card_tr_strings.cpp
 
 	# For AUTOUIC and AUTORCC.
 	${STRATOSHARK_QT_UI}

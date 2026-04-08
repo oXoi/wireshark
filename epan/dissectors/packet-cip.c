@@ -7045,7 +7045,7 @@ int dissect_cip_string_type(packet_info *pinfo, proto_tree *tree, proto_item *it
         break;
 
     case CIP_STRINGN_TYPE:
-       char_size = tvb_get_letohs(tvb, offset) * 2;
+       char_size = tvb_get_letohs(tvb, offset);
        string_size = tvb_get_letohs(tvb, offset+2) * char_size;
 
        /* Determine the string encoding; only 1-, 2-, or 4-byte character widths are supported. */

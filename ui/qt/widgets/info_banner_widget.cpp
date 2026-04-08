@@ -326,6 +326,8 @@ void InfoBannerWidget::loadSlidesFromResource(const QString &resource_path,
 
         // Parse per-type colors
         for(auto it = colors_obj.constBegin(); it != colors_obj.constEnd(); ++it) {
+            if (it.key() == QLatin1String("default"))
+                continue; // already processed
             BannerSlideType type = validTypeFromString(it.key(), resource_path, "config.colors", is_custom);
             if (static_cast<int>(type) < 0)
                 continue;

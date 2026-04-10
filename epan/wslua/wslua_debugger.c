@@ -301,15 +301,19 @@ static void wslua_debugger_update_hook(void)
  */
 void wslua_debugger_set_enabled(bool enabled)
 {
+    g_mutex_lock(&debugger.mutex);
     if (!enabled && debugger.state == WSLUA_DEBUGGER_PAUSED)
     {
+        g_mutex_unlock(&debugger.mutex);
         wslua_debugger_continue();
+        g_mutex_lock(&debugger.mutex);
     }
     debugger.enabled = enabled;
     if (enabled)
     {
         debugger.state = WSLUA_DEBUGGER_RUNNING;
     }
+    g_mutex_unlock(&debugger.mutex);
     wslua_debugger_update_hook();
 }
 
@@ -363,9 +367,11 @@ void wslua_debugger_run_to_line(const char *file_path, int64_t line)
     debugger.temporary_breakpoint.line = line;
     debugger.temporary_breakpoint.active = true;
 
+    debugger.step_mode = false;
+    debugger.paused_L = NULL;
+    debugger.enabled = true;
     debugger.state = WSLUA_DEBUGGER_RUNNING;
     g_mutex_unlock(&debugger.mutex);
-    wslua_debugger_set_enabled(true);
     wslua_debugger_update_hook();
 }
 
@@ -374,8 +380,8 @@ void wslua_debugger_run_to_line(const char *file_path, int64_t line)
  *
  * This function sets step mode, which causes the debugger to pause
  * at the very next line hook, regardless of breakpoints.
- * This is a "step into" style operation that follows execution
- * into any function calls.
+ * This is a "step over" style operation — it advances to the next
+ * Lua source line without descending into called functions.
  *
  * This function should only be called when the debugger is paused.
  */
@@ -542,11 +548,34 @@ void wslua_debugger_clear_breakpoints(void)
 }
 
 /**
- * @brief Get breakpoint state.
- * @param file_path The filename.
- * @param line The line number.
- * @return 1 if active, 0 if inactive, -1 if not found.
+ * @brief Internal: check breakpoint state using an already-canonical path.
  */
+static int32_t
+get_breakpoint_state_for_canonical(const char *canonical_path, int64_t line)
+{
+    if (!canonical_path)
+    {
+        return -1;
+    }
+
+    ensure_breakpoints_initialized();
+
+    int32_t result = -1;
+    g_mutex_lock(&debugger.mutex);
+    for (unsigned i = 0; i < breakpoints_array->len; i++)
+    {
+        wslua_breakpoint_t *bp =
+            &g_array_index(breakpoints_array, wslua_breakpoint_t, i);
+        if (wslua_debugger_breakpoint_matches(bp, canonical_path, line))
+        {
+            result = bp->active ? 1 : 0;
+            break;
+        }
+    }
+    g_mutex_unlock(&debugger.mutex);
+    return result;
+}
+
 int32_t wslua_debugger_get_breakpoint_state(const char *file_path, int64_t line)
 {
     char *norm_file_path = wslua_debugger_dup_canonical_path(file_path);
@@ -554,25 +583,21 @@ int32_t wslua_debugger_get_breakpoint_state(const char *file_path, int64_t line)
     {
         return -1;
     }
-
-    ensure_breakpoints_initialized();
-
-    g_mutex_lock(&debugger.mutex);
-    for (unsigned i = 0; i < breakpoints_array->len; i++)
-    {
-        wslua_breakpoint_t *bp =
-            &g_array_index(breakpoints_array, wslua_breakpoint_t, i);
-        if (wslua_debugger_breakpoint_matches(bp, norm_file_path, line))
-        {
-            const int32_t state = bp->active ? 1 : 0;
-            g_mutex_unlock(&debugger.mutex);
-            g_free(norm_file_path);
-            return state;
-        }
-    }
-    g_mutex_unlock(&debugger.mutex);
+    const int32_t result =
+        get_breakpoint_state_for_canonical(norm_file_path, line);
     g_free(norm_file_path);
-    return -1;
+    return result;
+}
+
+int32_t wslua_debugger_get_breakpoint_state_canonical(const char *canonical_path,
+                                                      int64_t line)
+{
+    return get_breakpoint_state_for_canonical(canonical_path, line);
+}
+
+char *wslua_debugger_canonical_path(const char *file_path)
+{
+    return wslua_debugger_dup_canonical_path(file_path);
 }
 
 /**
@@ -692,7 +717,9 @@ static void wslua_debug_hook(lua_State *L, lua_Debug *debug_info)
  */
 wslua_stack_frame_t *wslua_debugger_get_stack(int32_t *frame_count)
 {
+    g_mutex_lock(&debugger.mutex);
     lua_State *target_L = debugger.paused_L ? debugger.paused_L : debugger.L;
+    g_mutex_unlock(&debugger.mutex);
     if (!target_L)
     {
         *frame_count = 0;
@@ -943,7 +970,9 @@ static bool wslua_debugger_value_can_expand(lua_State *L, int idx)
 wslua_variable_t *wslua_debugger_get_variables(const char *path,
                                                int32_t *variable_count)
 {
+    g_mutex_lock(&debugger.mutex);
     lua_State *target_L = debugger.paused_L ? debugger.paused_L : debugger.L;
+    g_mutex_unlock(&debugger.mutex);
     if (!target_L)
     {
         *variable_count = 0;
@@ -1308,7 +1337,11 @@ void wslua_debugger_notify_script_loaded(const char *file_path)
  */
 bool wslua_debugger_is_paused(void)
 {
-    return debugger.state == WSLUA_DEBUGGER_PAUSED && debugger.paused_L != NULL;
+    g_mutex_lock(&debugger.mutex);
+    bool paused = debugger.state == WSLUA_DEBUGGER_PAUSED &&
+                  debugger.paused_L != NULL;
+    g_mutex_unlock(&debugger.mutex);
+    return paused;
 }
 
 /**
@@ -1321,10 +1354,41 @@ bool wslua_debugger_is_paused(void)
 #define WSLUA_EVAL_INSTRUCTION_LIMIT 1000000
 
 /**
- * @brief Hook that aborts evaluation when the instruction limit is reached.
+ * @brief Maximum call depth allowed during evaluation.
+ *
+ * This catches deep recursion that could overflow the C stack before
+ * the instruction-count limit triggers.
  */
-static void wslua_eval_timeout_hook(lua_State *L, lua_Debug *ar _U_)
+#define WSLUA_EVAL_MAX_CALL_DEPTH 100
+
+/** @brief Current call depth during expression evaluation. */
+static int eval_call_depth;
+
+/**
+ * @brief Hook that aborts evaluation on instruction limit or deep recursion.
+ */
+static void wslua_eval_timeout_hook(lua_State *L, lua_Debug *ar)
 {
+    if (ar->event == LUA_HOOKCALL || ar->event == LUA_HOOKTAILCALL)
+    {
+        eval_call_depth++;
+        if (eval_call_depth > WSLUA_EVAL_MAX_CALL_DEPTH)
+        {
+            luaL_error(L, "Evaluation aborted: call depth limit (%d) exceeded "
+                       "(possible infinite recursion)",
+                       WSLUA_EVAL_MAX_CALL_DEPTH);
+        }
+        return;
+    }
+    if (ar->event == LUA_HOOKRET)
+    {
+        if (eval_call_depth > 0)
+        {
+            eval_call_depth--;
+        }
+        return;
+    }
+    /* LUA_HOOKCOUNT — instruction limit reached */
     luaL_error(L, "Evaluation aborted: instruction limit (%d) exceeded "
                "(possible infinite loop)",
                WSLUA_EVAL_INSTRUCTION_LIMIT);
@@ -1362,7 +1426,9 @@ char *wslua_debugger_evaluate(const char *expression, char **error_msg)
         return NULL;
     }
 
+    g_mutex_lock(&debugger.mutex);
     lua_State *L = debugger.paused_L;
+    g_mutex_unlock(&debugger.mutex);
     if (!L)
     {
         if (error_msg)
@@ -1402,10 +1468,14 @@ char *wslua_debugger_evaluate(const char *expression, char **error_msg)
     }
 
     /*
-     * Install an instruction-count hook to abort runaway code.
-     * We check every 10000 instructions for efficiency.
+     * Install hooks to abort runaway code:
+     * - LUA_MASKCOUNT: fires after WSLUA_EVAL_INSTRUCTION_LIMIT instructions
+     * - LUA_MASKCALL / LUA_MASKRET: tracks call depth to catch deep recursion
+     *   that could overflow the C stack before the instruction limit fires
      */
-    lua_sethook(L, wslua_eval_timeout_hook, LUA_MASKCOUNT,
+    eval_call_depth = 0;
+    lua_sethook(L, wslua_eval_timeout_hook,
+                LUA_MASKCOUNT | LUA_MASKCALL | LUA_MASKRET,
                 WSLUA_EVAL_INSTRUCTION_LIMIT);
 
     /* Execute the chunk */

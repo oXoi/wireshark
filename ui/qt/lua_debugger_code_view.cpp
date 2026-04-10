@@ -613,6 +613,14 @@ void LuaDebuggerCodeView::lineNumberAreaPaintEvent(QPaintEvent *event)
 
     painter.fillRect(event->rect(), gutterColor);
 
+    /* Canonicalize the filename once for all visible lines. */
+    char *canonical = nullptr;
+    if (!filename.isEmpty())
+    {
+        canonical =
+            wslua_debugger_canonical_path(filename.toUtf8().constData());
+    }
+
     QTextBlock block = firstVisibleBlock();
     qint32 blockNumber = block.blockNumber();
     qint32 top = static_cast<qint32>(
@@ -630,10 +638,11 @@ void LuaDebuggerCodeView::lineNumberAreaPaintEvent(QPaintEvent *event)
                              fontMetrics().height(), Qt::AlignRight, number);
 
             // Draw breakpoint
-            if (!filename.isEmpty())
+            if (canonical)
             {
-                const int32_t state = wslua_debugger_get_breakpoint_state(
-                    filename.toUtf8().constData(), blockNumber + 1);
+                const int32_t state =
+                    wslua_debugger_get_breakpoint_state_canonical(
+                        canonical, blockNumber + 1);
                 if (state != -1)
                 {
                     if (state == 1)
@@ -657,6 +666,8 @@ void LuaDebuggerCodeView::lineNumberAreaPaintEvent(QPaintEvent *event)
         bottom = top + static_cast<qint32>(blockBoundingRect(block).height());
         ++blockNumber;
     }
+
+    g_free(canonical);
 }
 
 void LineNumberArea::mousePressEvent(QMouseEvent *event)

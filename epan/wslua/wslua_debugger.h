@@ -96,8 +96,9 @@ extern "C"
      * @brief Step to the next line.
      *
      * Resumes execution and pauses at the very next line hook,
-     * regardless of breakpoints. This follows execution into
-     * function calls (similar to "step into").
+     * regardless of breakpoints. This advances to the next Lua
+     * source line without descending into called functions
+     * (similar to "step over").
      */
     WS_DLL_PUBLIC void wslua_debugger_step(void);
 
@@ -148,6 +149,28 @@ extern "C"
      */
     WS_DLL_PUBLIC int32_t
     wslua_debugger_get_breakpoint_state(const char *file_path, int64_t line);
+
+    /**
+     * @brief Get breakpoint state using an already-canonical path.
+     *
+     * Like wslua_debugger_get_breakpoint_state() but skips path
+     * canonicalization. Use with wslua_debugger_canonical_path() to
+     * avoid repeated allocations when checking many lines in one file.
+     *
+     * @param canonical_path A canonical file path.
+     * @param line The line number.
+     * @return 1 if active, 0 if inactive, -1 if not found.
+     */
+    WS_DLL_PUBLIC int32_t
+    wslua_debugger_get_breakpoint_state_canonical(
+        const char *canonical_path, int64_t line);
+
+    /**
+     * @brief Return a newly allocated canonical path.
+     * @param file_path The raw file path.
+     * @return Canonical path (caller must g_free), or NULL on failure.
+     */
+    WS_DLL_PUBLIC char *wslua_debugger_canonical_path(const char *file_path);
 
     /**
      * @brief Variable structure for inspection.

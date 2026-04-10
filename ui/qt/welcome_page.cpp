@@ -282,8 +282,18 @@ bool WelcomePage::event(QEvent *event)
 {
     switch (event->type()) {
     case QEvent::ApplicationPaletteChange:
+    {
         updateStyleSheets();
         break;
+    }
+    case QEvent::LanguageChange:
+    {
+        welcome_ui_->retranslateUi(this);
+        welcome_ui_->titleSectionFlavorLabel->setText(flavor_);
+        interfaceListChanged();
+        setReleaseLabel();
+        break;
+    }
     default:
         break;
 
@@ -345,25 +355,6 @@ void WelcomePage::setCaptureFilterText(const QString capture_filter)
 {
     welcome_ui_->captureSectionFilterComboBox->lineEdit()->setText(capture_filter);
     captureFilterTextEdited(capture_filter);
-}
-
-void WelcomePage::changeEvent(QEvent* event)
-{
-    if (0 != event)
-    {
-        switch (event->type())
-        {
-        case QEvent::LanguageChange:
-            welcome_ui_->retranslateUi(this);
-            welcome_ui_->titleSectionFlavorLabel->setText(flavor_);
-            interfaceListChanged();
-            setReleaseLabel();
-            break;
-        default:
-            break;
-        }
-    }
-    QFrame::changeEvent(event);
 }
 
 void WelcomePage::showCaptureFilesContextMenu(QPoint pos)
@@ -493,11 +484,6 @@ void WelcomePage::updateStyleSheets()
             "  padding-bottom: 0;"
             "}"
             );
-
-    welcome_ui_->tipsSectionCard->updateStyleSheets();
-
-    welcome_ui_->learnSectionCard->updateStyleSheets(
-            QColor(tango_aluminium_4), QColor(tango_sky_blue_4));
 }
 
 void WelcomePage::on_openFileSectionLabel_clicked()

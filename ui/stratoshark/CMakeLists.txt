@@ -617,6 +617,10 @@ set(WIRESHARK_QT_UI
 	${CMAKE_SOURCE_DIR}/ui/qt/welcome_page_preferences_frame.ui
 )
 
+set(WIRESHARK_QT_WIDGETS_UI
+	${CMAKE_SOURCE_DIR}/ui/qt/widgets/learn_card_widget.ui
+)
+
 if(HAVE_PCAP_REMOTE)
 	list(APPEND WIRESHARK_QT_UI
 		${CMAKE_SOURCE_DIR}/ui/qt/remote_capture_dialog.ui
@@ -627,6 +631,7 @@ endif()
 set (STRATOSHARK_QT_UI
 	stratoshark_main_window.ui
 	${WIRESHARK_QT_UI}
+	${WIRESHARK_QT_WIDGETS_UI}
 )
 
 set(WIRESHARK_QT_TS
@@ -690,6 +695,20 @@ GENERATE_JSON_TR_STRINGS(
 	        buttons:label,tooltip
 )
 
+# Stylesheet resources
+set(STYLESHEET_QSS_FILES
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/learn-card-dark.qss
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/learn-card-light.qss
+)
+set(_stylesheet_qrc_files "")
+foreach(_qss ${STYLESHEET_QSS_FILES})
+	file(RELATIVE_PATH _qss_alias "${CMAKE_SOURCE_DIR}/ui/stylesheets" "${_qss}")
+	string(APPEND _stylesheet_qrc_files
+		"        <file alias=\"${_qss_alias}\">${_qss}</file>\n")
+endforeach()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/stylesheets.qrc"
+	"<RCC>\n    <qresource prefix=\"/stylesheets\">\n${_stylesheet_qrc_files}    </qresource>\n</RCC>\n")
+
 # JSON data resources
 set(_json_qrc_files
 	"        <file alias=\"slides.json\">${CMAKE_SOURCE_DIR}/resources/json/slides.json</file>\n")
@@ -734,6 +753,7 @@ qt_add_resources(STRATOSHARK_QT_QRC
 	${CMAKE_CURRENT_BINARY_DIR}/i18n.qrc
 	${CMAKE_CURRENT_BINARY_DIR}/authors.qrc
 	${CMAKE_CURRENT_BINARY_DIR}/json_resource.qrc
+	${CMAKE_CURRENT_BINARY_DIR}/stylesheets.qrc
 	OPTIONS ${CMAKE_AUTORCC_OPTIONS}
 )
 

@@ -40,7 +40,6 @@ public slots:
 protected:
     virtual bool event(QEvent *event);
     virtual void resizeEvent(QResizeEvent *event);
-    virtual void changeEvent(QEvent* event);
 
 protected slots:
     void on_openFileSectionLabel_clicked();

@@ -699,12 +699,21 @@ set(WIRESHARK_QT_UI
 	wireshark_main_window.ui
 )
 
+set(WIRESHARK_QT_WIDGETS_UI
+	widgets/learn_card_widget.ui
+)
+
 if(HAVE_PCAP_REMOTE)
 	list(APPEND WIRESHARK_QT_UI
 		remote_capture_dialog.ui
 		remote_settings_dialog.ui
 	)
 endif()
+
+set(WIRESHARK_QT_UI_SRCS
+	${WIRESHARK_QT_UI}
+	${WIRESHARK_QT_WIDGETS_UI}
+)
 
 set(WIRESHARK_QT_TS
 	wireshark_ca.ts
@@ -772,6 +781,20 @@ GENERATE_JSON_TR_STRINGS(
 	        buttons:label,tooltip
 )
 
+# Stylesheet resources
+set(STYLESHEET_QSS_FILES
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/learn-card-dark.qss
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/learn-card-light.qss
+)
+set(_stylesheet_qrc_files "")
+foreach(_qss ${STYLESHEET_QSS_FILES})
+	file(RELATIVE_PATH _qss_alias "${CMAKE_SOURCE_DIR}/ui/stylesheets" "${_qss}")
+	string(APPEND _stylesheet_qrc_files
+		"        <file alias=\"${_qss_alias}\">${_qss}</file>\n")
+endforeach()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/stylesheets.qrc"
+	"<RCC>\n    <qresource prefix=\"/stylesheets\">\n${_stylesheet_qrc_files}    </qresource>\n</RCC>\n")
+
 # JSON data resources
 set(_json_qrc_files
 	"        <file alias=\"slides.json\">${CMAKE_SOURCE_DIR}/resources/json/slides.json</file>\n")
@@ -816,6 +839,7 @@ qt_add_resources(WIRESHARK_QT_QRC
 	${CMAKE_CURRENT_BINARY_DIR}/i18n.qrc
 	${CMAKE_CURRENT_BINARY_DIR}/authors.qrc
 	${CMAKE_CURRENT_BINARY_DIR}/json_resource.qrc
+	${CMAKE_CURRENT_BINARY_DIR}/stylesheets.qrc
 	OPTIONS ${CMAKE_AUTORCC_OPTIONS}
 )
 
@@ -860,7 +884,7 @@ register_tap_files(wireshark-tap-register.c
 	${WIRESHARK_QT_TAP_SRC}
 )
 
-source_group("ui\\UIC Files" FILES ${WIRESHARK_QT_UI})
+source_group("ui\\UIC Files" FILES ${WIRESHARK_QT_UI_SRCS})
 source_group("ui\\qrc" FILES ${WIRESHARK_QT_QRC})
 source_group("ui\\Header" FILES ${WIRESHARK_QT_HEADERS})
 source_group("ui\\Widget Header" FILES ${WIRESHARK_WIDGET_HEADERS})
@@ -889,7 +913,7 @@ add_library(qtui OBJECT
 	${CMAKE_CURRENT_BINARY_DIR}/learn_card_tr_strings.cpp
 
 	# For AUTOUIC and AUTORCC.
-	${WIRESHARK_QT_UI}
+	${WIRESHARK_QT_UI_SRCS}
 	${WIRESHARK_QT_QRC}
 
 	${WIRESHARK_QT_TAP_SRC}

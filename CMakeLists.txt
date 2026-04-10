@@ -1415,6 +1415,7 @@ if(BUILD_wireshark OR BUILD_stratoshark)
 				PrintSupport
 				Widgets
 				Concurrent
+				Network
 				Core5Compat
 			OPTIONAL_COMPONENTS
 				DBus

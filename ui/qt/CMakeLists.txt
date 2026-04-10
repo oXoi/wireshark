@@ -936,6 +936,7 @@ if(USE_qt6)
 		Qt6::Core5Compat
 		Qt6::Concurrent
 		Qt6::PrintSupport
+		Qt6::Network
 	)
 	if(Qt6Multimedia_FOUND)
 		target_link_libraries(qtui PUBLIC Qt6::Multimedia)

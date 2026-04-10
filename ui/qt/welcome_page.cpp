@@ -164,6 +164,10 @@ void WelcomePage::appInitialized()
     splash_overlay_->fadeOut();
     splash_overlay_ = NULL;
     welcome_ui_->tipsSectionCard->startRotation();
+
+    // Ensure sidebar layout adapts to the restored window size.
+    // resizeEvent may have fired before the layout was finalized.
+    updateSidebarLayout();
 }
 
 void WelcomePage::applySidebarPreferences()
@@ -228,28 +232,116 @@ void WelcomePage::showEvent(QShowEvent *event)
     updateSidebarLayout();
 }
 
+/*
+ * Adapts the sidebar widget states to the available vertical space.
+ *
+ * The sidebar contains two widgets stacked vertically with spacing between
+ * them: the InfoBannerWidget (tips/sponsors) and the LearnCardWidget (docs
+ * links + action buttons). Both support a compact mode to reduce their
+ * height when the window is small.
+ *
+ * Collapse order (as the window shrinks):
+ *   1. LearnCardWidget links collapse (vertical list -> horizontal row)
+ *   2. InfoBannerWidget compacts (hides illustration and body text)
+ *
+ * Expand order (as the window grows) is the reverse:
+ *   1. InfoBannerWidget expands back to full
+ *   2. LearnCardWidget links expand back to vertical
+ *
+ * All size values are queried from the widgets and layout, not hardcoded:
+ *   - tipsFull:  InfoBannerWidget::sizeHint().height()
+ *                Always returns the full preferred height (360) regardless
+ *                of compact state. This is stable because sizeHint()
+ *                reports what the widget *wants*, while compact mode is
+ *                enforced via setMaximumHeight().
+ *   - learnMax:  LearnCardWidget::maximumHeight()  (from .ui: 240)
+ *   - learnMin:  LearnCardWidget::minimumHeight()   (from .ui: 110)
+ *   - spacing:   sidebarLayout->spacing()            (from .ui: 16)
+ *
+ * Hysteresis (kHysteresis = 20px):
+ *   Without hysteresis, at the exact collapse threshold the layout
+ *   oscillates: collapsing a widget frees space, which satisfies the
+ *   expand threshold, which expands, which exceeds the threshold again.
+ *   On each resize event this cycle repeats, causing visible flickering.
+ *
+ *   Hysteresis adds a dead zone between collapse and expand thresholds.
+ *   A widget collapses at threshold T but only re-expands at T + 20.
+ *   In the 20px gap, the current state is preserved.
+ *
+ *   The value 20px was chosen empirically: it must be large enough that
+ *   the layout geometry change from collapsing/expanding a widget (which
+ *   can shift available height by a few pixels due to rounding, spacing,
+ *   and platform differences) doesn't cross back over the threshold. In
+ *   practice, resize events during a user drag arrive ~8-12px apart, so
+ *   20px ensures at least one stable frame at the boundary. A larger
+ *   value would delay the transition visibly; a smaller one risks not
+ *   fully suppressing the oscillation on high-DPI displays where pixel
+ *   increments are coarser.
+ *
+ * Decision zones (with current widget sizes):
+ *
+ *   available >= 636 (linksExpandAt)
+ *     -> full tips + expanded links
+ *
+ *   available >= 506 (tipsExpandAt)  and  < 636
+ *     -> full tips + collapsed links
+ *     (between 616-635: hysteresis zone for links -- keeps current state
+ *      if already expanded, won't re-expand if collapsed)
+ *
+ *   available >= 486 (tipsCompactAt)  and  < 506
+ *     -> hysteresis zone for tips -- keeps current tips state,
+ *       links forced collapsed
+ *
+ *   available < 486 (tipsCompactAt)
+ *     -> compact tips + collapsed links
+ *
+ * Called from: resizeEvent(), showEvent(), appInitialized(), and
+ * indirectly via updateGeometry() when the welcome header banner
+ * visibility changes.
+ */
 void WelcomePage::updateSidebarLayout()
 {
     int available = welcome_ui_->sidebarContainer->height();
     if (available <= 0)
         return;
 
-    // Sidebar content: InfoBanner + spacing(16) + LearnCard (expands to fill)
-    // Full:   360 + 16 + 240 = 616
-    // Medium: 360 + 16 + 112 = 488
-    const int kFullNeeded = 616;
-    const int kMediumNeeded = 488;
+    static const int kHysteresis = 20;
 
-    if (available >= kFullNeeded) {
-        welcome_ui_->learnSectionCard->setLinksCollapsed(false);
-        welcome_ui_->tipsSectionCard->setCompactMode(false);
-    } else if (available >= kMediumNeeded) {
-        welcome_ui_->learnSectionCard->setLinksCollapsed(true);
-        welcome_ui_->tipsSectionCard->setCompactMode(false);
+    int spacing = welcome_ui_->sidebarLayout->spacing();
+    int tipsFull = welcome_ui_->tipsSectionCard->sizeHint().height();
+    int learnMax = welcome_ui_->learnSectionCard->maximumHeight();
+    int learnMin = welcome_ui_->learnSectionCard->minimumHeight();
+
+    // Collapse threshold: the minimum available height to show this state.
+    // Expand threshold: collapse + hysteresis -- prevents oscillation.
+
+    // Level 1: links collapse when full tips + expanded learn don't fit.
+    int linksCollapseAt = tipsFull + spacing + learnMax;
+    int linksExpandAt = linksCollapseAt + kHysteresis;
+
+    // Level 2: tips compact when full tips + collapsed learn don't fit.
+    int tipsCompactAt = tipsFull + spacing + learnMin;
+    int tipsExpandAt = tipsCompactAt + kHysteresis;
+
+    bool collapseLinks = welcome_ui_->learnSectionCard->isLinksCollapsed();
+    bool compactTips = welcome_ui_->tipsSectionCard->isCompactMode();
+
+    if (available >= linksExpandAt) {
+        collapseLinks = false;
+        compactTips = false;
+    } else if (available >= tipsExpandAt) {
+        collapseLinks = true;
+        compactTips = false;
+    } else if (available >= tipsCompactAt) {
+        collapseLinks = true;
+        // tips state preserved (hysteresis zone)
     } else {
-        welcome_ui_->learnSectionCard->setLinksCollapsed(true);
-        welcome_ui_->tipsSectionCard->setCompactMode(true);
+        collapseLinks = true;
+        compactTips = true;
     }
+
+    welcome_ui_->learnSectionCard->setLinksCollapsed(collapseLinks);
+    welcome_ui_->tipsSectionCard->setCompactMode(compactTips);
 }
 
 void WelcomePage::showCaptureFilesContextMenu(QPoint pos)

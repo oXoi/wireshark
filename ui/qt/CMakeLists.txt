@@ -702,6 +702,7 @@ set(WIRESHARK_QT_UI
 )
 
 set(WIRESHARK_QT_WIDGETS_UI
+	widgets/capture_card_widget.ui
 	widgets/learn_card_widget.ui
 )
 

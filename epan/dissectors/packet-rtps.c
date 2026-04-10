@@ -656,7 +656,6 @@ static dissector_table_t rtps_type_name_table;
 #define PID_DATA_TAGS                           (0x1003)
 #define PID_ENDPOINT_SECURITY_INFO              (0x1004)
 #define PID_PARTICIPANT_SECURITY_INFO           (0x1005)
-#define PID_IDENTITY_STATUS_TOKEN               (0x1006)
 #define PID_AVAILABLE_BUILTIN_ENDPOINTS_EXT     (0x1007)
 #define PID_PARTICIPANT_SECURITY_DIGITAL_SIGNATURE_ALGO     (0x1010)
 #define PID_PARTICIPANT_SECURITY_KEY_ESTABLISHMENT_ALGO     (0x1011)
@@ -1318,6 +1317,8 @@ static int hf_rtps_source_participant_guid;
 static int hf_rtps_message_identity_source_guid;
 static int hf_rtps_pgm_message_class_id;
 static int hf_rtps_pgm_data_holder_class_id;
+static int hf_rtps_param_identity_token;
+static int hf_rtps_param_permissions_token;
 /* static int hf_rtps_pgm_data_holder_stringseq_size; */
 /* static int hf_rtps_pgm_data_holder_stringseq_name; */
 /* static int hf_rtps_pgm_data_holder_long_long; */
@@ -2290,7 +2291,6 @@ static const value_string parameter_id_v2_vals[] = {
   { PID_PARTICIPANT_SECURITY_KEY_ESTABLISHMENT_ALGO,    "PID_PARTICIPANT_SECURITY_KEY_ESTABLISHMENT_ALGO" },
   { PID_PARTICIPANT_SECURITY_SYMMETRIC_CIPHER_ALGO,     "PID_PARTICIPANT_SECURITY_SYMMETRIC_CIPHER_ALGO" },
   { PID_ENDPOINT_SECURITY_SYMMETRIC_CIPHER_ALGO,        "PID_ENDPOINT_SECURITY_SYMMETRIC_CIPHER_ALGO" },
-  { PID_IDENTITY_STATUS_TOKEN,          "PID_IDENTITY_STATUS_TOKEN"},
   { PID_AVAILABLE_BUILTIN_ENDPOINTS_EXT, "PID_AVAILABLE_BUILTIN_ENDPOINTS_EXT"},
   { PID_DOMAIN_ID,                      "PID_DOMAIN_ID" },
   { PID_DOMAIN_TAG,                     "PID_DOMAIN_TAG" },
@@ -5980,6 +5980,92 @@ static int rtps_util_add_data_tags(proto_tree *rtps_parameter_tree, tvbuff_t *tv
     return offset;
 }
 
+/* Forward declaration for rtps_util_add_data_holder used by token dissectors */
+static int rtps_util_add_data_holder(proto_tree *tree, tvbuff_t * tvb, packet_info * pinfo,
+        int offset, const unsigned encoding, int seq_index, int alignment_zero);
+
+
+static void rtps_util_add_identity_token(proto_tree *rtps_parameter_tree, tvbuff_t *tvb,
+    packet_info *pinfo, int offset, const unsigned encoding, int param_length)
+{
+    int alignment_zero = offset;
+    proto_item *ti = NULL;
+    proto_tree_add_item(
+        rtps_parameter_tree,
+        hf_rtps_param_identity_token,
+        tvb,
+        offset,
+        param_length,
+        ENC_NA);
+
+    proto_tree *token_tree = proto_tree_add_subtree(
+        rtps_parameter_tree,
+        tvb,
+        offset,
+        param_length,
+        ett_rtps_data_holder,
+        &ti,
+        "Token Content");
+
+    int token_end = rtps_util_add_data_holder(
+        token_tree,
+        tvb,
+        pinfo,
+        offset,
+        encoding,
+        0,
+        alignment_zero);
+
+    /* offset is the start of the token data within the parameter. token_end
+     * is the position after the last byte consumed by rtps_util_add_data_holder.
+     * The guard ensures we only resize the subtree item when data was actually
+     * parsed; if rtps_util_add_data_holder could not advance (e.g. truncated
+     * packet), leaving the item at param_length is safer than setting it to 0. */
+    if (token_end > offset) {
+        proto_item_set_len(ti, token_end - offset);
+    }
+}
+
+static void rtps_util_add_permissions_token(proto_tree *rtps_parameter_tree, tvbuff_t *tvb,
+    packet_info *pinfo, int offset, const unsigned encoding, int param_length)
+{
+    int alignment_zero = offset;
+    proto_item *ti = NULL;
+    proto_tree_add_item(
+        rtps_parameter_tree,
+        hf_rtps_param_permissions_token,
+        tvb,
+        offset,
+        param_length,
+        ENC_NA);
+
+    proto_tree *token_tree = proto_tree_add_subtree(
+        rtps_parameter_tree,
+        tvb,
+        offset,
+        param_length,
+        ett_rtps_data_holder,
+        &ti,
+        "Token Content");
+
+    int token_end = rtps_util_add_data_holder(
+        token_tree,
+        tvb,
+        pinfo,
+        offset,
+        encoding,
+        0,
+        alignment_zero);
+
+    /* offset is the start of the token data within the parameter. token_end
+     * is the position after the last byte consumed by rtps_util_add_data_holder.
+     * The guard ensures we only resize the subtree item when data was actually
+     * parsed; if rtps_util_add_data_holder could not advance (e.g. truncated
+     * packet), leaving the item at param_length is safer than setting it to 0. */
+    if (token_end > offset) {
+        proto_item_set_len(ti, token_end - offset);
+    }
+}
 
 
 /* ------------------------------------------------------------------------- */
@@ -12377,6 +12463,28 @@ static bool dissect_parameter_sequence_v2(proto_tree *rtps_parameter_tree, packe
       }
       break;
     }
+
+    case PID_IDENTITY_TOKEN:
+      ENSURE_LENGTH(4);
+      rtps_util_add_identity_token(
+          rtps_parameter_tree,
+          tvb,
+          pinfo,
+          offset,
+          encoding,
+          param_length);
+      break;
+
+    case PID_PERMISSIONS_TOKEN:
+      ENSURE_LENGTH(4);
+      rtps_util_add_permissions_token(
+          rtps_parameter_tree,
+          tvb,
+          pinfo,
+          offset,
+          encoding,
+          param_length);
+      break;
 
     /* 0...2...........7...............15.............23...............31
     * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -21756,6 +21864,14 @@ void proto_register_rtps(void) {
     { &hf_rtps_pgm_data_holder_class_id,
       { "Class Id", "rtps.pgm.data_holder.class_id",
         FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL }
+    },
+    { &hf_rtps_param_identity_token,
+      { "Identity Token", "rtps.param.identity_token",
+        FT_NONE, BASE_NONE, NULL, 0, NULL, HFILL }
+    },
+    { &hf_rtps_param_permissions_token,
+      { "Permissions Token", "rtps.param.permissions_token",
+        FT_NONE, BASE_NONE, NULL, 0, NULL, HFILL }
     },
 #if 0
     { &hf_rtps_pgm_data_holder_stringseq_size,

@@ -11543,9 +11543,8 @@ dissect_btatt(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data)
                     sub_tree = proto_item_add_subtree(sub_item, ett_btatt_list);
 
                     offset = dissect_handle(sub_tree, pinfo, hf_btatt_handle, tvb, offset, l2cap_data, NULL, HANDLE_TVB, opcode);
-                    handle = tvb_get_uint16(tvb, offset - 2, ENC_LITTLE_ENDIAN);
 
-                    proto_tree_add_item(sub_tree, hf_btatt_group_end_handle, tvb, offset, 2, ENC_LITTLE_ENDIAN);
+                    proto_tree_add_item_ret_uint16(sub_tree, hf_btatt_group_end_handle, tvb, offset, 2, ENC_LITTLE_ENDIAN, &handle);
                     offset += 2;
 
                     if (request_data) {

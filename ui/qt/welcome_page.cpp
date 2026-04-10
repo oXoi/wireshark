@@ -11,7 +11,6 @@
 
 #include <epan/prefs.h>
 
-#include "ui/capture_globals.h"
 #include "ui/recent.h"
 #include "ui/urls.h"
 
@@ -25,6 +24,8 @@
 #include <ui/qt/utils/software_update.h>
 #include <ui/qt/models/recentcapturefiles_list_model.h>
 #include <ui/qt/utils/workspace_state.h>
+#include <ui/qt/widgets/capture_card_widget.h>
+
 #include "main_application.h"
 
 #include <QClipboard>
@@ -40,8 +41,6 @@
 #define VERSION_FLAVOR ""
 #endif
 
-#include <extcap.h>
-
 WelcomePage::WelcomePage(QWidget *parent) :
     QFrame(parent),
     welcome_ui_(new Ui::WelcomePage),
@@ -56,18 +55,11 @@ WelcomePage::WelcomePage(QWidget *parent) :
 {
     welcome_ui_->setupUi(this);
 
-	/* Ensures that we can shrink the height to at least around 450px */
-    welcome_ui_->openFileSectionRecentList->setMinimumHeight(150);
-    welcome_ui_->captureSectionInterfaceFrame->setMinimumHeight(150);
-
+    setContentsMargins(0, 0, 0, 0);
     setAccessibleName(tr("Welcome page"));
     setAccessibleDescription(tr("The %1 welcome page provides access to recent files, capture interfaces, and learning resources.").arg(mainApp->applicationName()));
 
     welcome_ui_->tipsSectionCard->setVisible(true);
-
-    welcome_ui_->captureSectionFilterComboBox->setEnabled(false);
-
-    welcome_ui_->titleSectionBannerLabel->setText(tr("Welcome to %1").arg(mainApp->applicationName()));
 
     updateStyleSheets();
     applySidebarPreferences();
@@ -111,29 +103,13 @@ WelcomePage::WelcomePage(QWidget *parent) :
 
     connect(mainApp, &MainApplication::appInitialized, this, &WelcomePage::appInitialized);
     connect(mainApp, &MainApplication::preferencesChanged, this, &WelcomePage::applySidebarPreferences);
-    connect(mainApp, &MainApplication::localInterfaceListChanged, this, &WelcomePage::interfaceListChanged);
-#ifdef HAVE_LIBPCAP
-    connect(mainApp, &MainApplication::scanLocalInterfaces,
-            welcome_ui_->captureSectionInterfaceFrame, &InterfaceFrame::scanLocalInterfaces);
-#endif
-    welcome_ui_->captureSectionInterfaceTypeButton->setAccessibleName(tr("Interface type filter"));
-    welcome_ui_->captureSectionInterfaceTypeButton->setAccessibleDescription(tr("Filters the capture source list by type. Shows how many sources are currently visible and how many are hidden by the active filter."));
-    welcome_ui_->captureSectionInterfaceFrame->setAccessibleName(tr("Capture sources"));
-    welcome_ui_->captureSectionInterfaceFrame->setAccessibleDescription(tr("Lists available capture sources. Select one or more to capture from."));
-    welcome_ui_->captureSectionFilterComboBox->setAccessibleName(tr("Capture filter"));
-    welcome_ui_->captureSectionFilterComboBox->setAccessibleDescription(tr("Enter a capture filter expression to limit which data is recorded during live capture."));
 
-    connect(welcome_ui_->captureSectionInterfaceFrame, &InterfaceFrame::itemSelectionChanged,
-            welcome_ui_->captureSectionFilterComboBox, &CaptureFilterCombo::interfacesChanged);
-    connect(welcome_ui_->captureSectionInterfaceFrame, &InterfaceFrame::typeSelectionChanged,
-                    this, &WelcomePage::interfaceListChanged);
-    connect(welcome_ui_->captureSectionInterfaceFrame, &InterfaceFrame::itemSelectionChanged, this, &WelcomePage::interfaceSelected);
-    connect(welcome_ui_->captureSectionFilterComboBox->lineEdit(), &QLineEdit::textEdited,
-            this, &WelcomePage::captureFilterTextEdited);
-    connect(welcome_ui_->captureSectionFilterComboBox, &CaptureFilterCombo::captureFilterSyntaxChanged,
-            this, &WelcomePage::captureFilterSyntaxChanged);
-    connect(welcome_ui_->captureSectionFilterComboBox, &CaptureFilterCombo::startCapture,
-            this, &WelcomePage::captureStarting);
+    // "Capture" header click opens Capture Options dialog
+    if (auto *captureHeader = welcome_ui_->captureSectionCard->findChild<ClickableLabel*>(QStringLiteral("captureHeader"))) {
+        connect(captureHeader, &ClickableLabel::clicked, this, []() {
+            mainApp->doTriggerMenuItem(MainApplication::CaptureOptionsDialog);
+        });
+    }
 
     splash_overlay_ = new SplashOverlay(this);
 }
@@ -145,32 +121,32 @@ WelcomePage::~WelcomePage()
 
 InterfaceFrame *WelcomePage::getInterfaceFrame()
 {
-    return welcome_ui_->captureSectionInterfaceFrame;
+    return welcome_ui_->captureSectionCard->interfaceFrame();
+}
+
+CaptureCardWidget *WelcomePage::captureCard()
+{
+    return welcome_ui_->captureSectionCard;
 }
 
 const QString WelcomePage::captureFilter()
 {
-    return welcome_ui_->captureSectionFilterComboBox->currentText();
+    return welcome_ui_->captureSectionCard->captureFilter();
 }
 
 void WelcomePage::setCaptureFilter(const QString capture_filter)
 {
-    // capture_filter comes from the current filter in
-    // CaptureInterfacesDialog. We need to find a good way to handle
-    // multiple filters.
-    welcome_ui_->captureSectionFilterComboBox->lineEdit()->setText(capture_filter);
+    welcome_ui_->captureSectionCard->setCaptureFilter(capture_filter);
 }
 
-void WelcomePage::interfaceListChanged()
+void WelcomePage::setCaptureFilterText(const QString capture_filter)
 {
-    QString btnText = tr("All interfaces shown");
-    if (welcome_ui_->captureSectionInterfaceFrame->interfacesHidden() > 0) {
-        btnText = tr("%n interface(s) shown, %1 hidden", "",
-                     welcome_ui_->captureSectionInterfaceFrame->interfacesPresent())
-                .arg(welcome_ui_->captureSectionInterfaceFrame->interfacesHidden());
-    }
-    welcome_ui_->captureSectionInterfaceTypeButton->setText(btnText);
-    welcome_ui_->captureSectionInterfaceTypeButton->setMenu(welcome_ui_->captureSectionInterfaceFrame->getSelectionMenu());
+    welcome_ui_->captureSectionCard->setCaptureFilterText(capture_filter);
+}
+
+void WelcomePage::interfaceSelected()
+{
+    welcome_ui_->captureSectionCard->interfaceSelected();
 }
 
 void WelcomePage::setReleaseLabel()
@@ -184,16 +160,6 @@ void WelcomePage::appInitialized()
 {
     setReleaseLabel();
     applySidebarPreferences();
-
-#ifdef HAVE_LIBPCAP
-    welcome_ui_->captureSectionFilterComboBox->lineEdit()->setText(global_capture_opts.default_options.cfilter);
-#endif // HAVE_LIBPCAP
-
-    welcome_ui_->captureSectionFilterComboBox->setEnabled(true);
-
-    interfaceListChanged();
-
-    welcome_ui_->captureSectionInterfaceFrame->ensureSelectedInterface();
 
     splash_overlay_->fadeOut();
     splash_overlay_ = NULL;
@@ -220,64 +186,6 @@ void WelcomePage::applySidebarPreferences()
     welcome_ui_->sidebarContainer->setVisible(sidebar_visible);
 }
 
-#ifdef HAVE_LIBPCAP
-// Update each selected device cfilter when the user changes the contents
-// of the capture filter lineedit. We do so here so that we don't clobber
-// filters set in the Capture Options / Interfaces dialog or ones set via
-// the command line.
-void WelcomePage::captureFilterTextEdited(const QString capture_filter)
-{
-    if (global_capture_opts.num_selected > 0) {
-        interface_t *device;
-
-        for (unsigned i = 0; i < global_capture_opts.all_ifaces->len; i++) {
-            device = &g_array_index(global_capture_opts.all_ifaces, interface_t, i);
-            if (!device->selected) {
-                continue;
-            }
-            //                if (device->active_dlt == -1) {
-            //                    simple_dialog(ESD_TYPE_ERROR, ESD_BTN_OK, "The link type of interface %s was not specified.", device->name);
-            //                    continue;  /* Programming error: somehow managed to select an "unsupported" entry */
-            //                }
-            g_free(device->cfilter);
-            if (capture_filter.isEmpty()) {
-                device->cfilter = NULL;
-            } else {
-                device->cfilter = qstring_strdup(capture_filter);
-            }
-            //                update_filter_string(device->name, filter_text);
-        }
-    }
-}
-#else
-// No-op if we don't have capturing.
-void WelcomePage::captureFilterTextEdited(const QString)
-{
-}
-#endif
-
-// The interface list selection has changed. At this point the user might
-// have entered a filter or we might have pre-filled one from a number of
-// sources such as our remote connection, the command line, or a previous
-// selection.
-// Must not change any interface data.
-void WelcomePage::interfaceSelected()
-{
-    QPair <const QString, bool> sf_pair = CaptureFilterEdit::getSelectedFilter();
-    const QString user_filter = sf_pair.first;
-    bool conflict = sf_pair.second;
-
-    if (conflict) {
-        welcome_ui_->captureSectionFilterComboBox->lineEdit()->clear();
-        welcome_ui_->captureSectionFilterComboBox->setConflict(true);
-    } else {
-        welcome_ui_->captureSectionFilterComboBox->lineEdit()->setText(user_filter);
-    }
-
-    // Notify others (capture options dialog) that the selection has changed.
-    emit interfacesChanged();
-}
-
 bool WelcomePage::event(QEvent *event)
 {
     switch (event->type()) {
@@ -290,7 +198,6 @@ bool WelcomePage::event(QEvent *event)
     {
         welcome_ui_->retranslateUi(this);
         welcome_ui_->titleSectionFlavorLabel->setText(flavor_);
-        interfaceListChanged();
         setReleaseLabel();
         break;
     }
@@ -301,22 +208,6 @@ bool WelcomePage::event(QEvent *event)
     return QFrame::event(event);
 }
 
-void WelcomePage::on_captureSectionInterfaceFrame_showExtcapOptions(QString device_name, bool startCaptureOnClose)
-{
-    emit showExtcapOptions(device_name, startCaptureOnClose);
-}
-
-void WelcomePage::on_captureSectionInterfaceFrame_startCapture(QStringList ifaces)
-{
-    emit startCapture(ifaces);
-}
-
-void WelcomePage::captureStarting()
-{
-    welcome_ui_->captureSectionInterfaceFrame->ensureSelectedInterface();
-    emit startCapture(QStringList());
-}
-
 void WelcomePage::resizeEvent(QResizeEvent *event)
 {
     if (splash_overlay_)
@@ -324,6 +215,16 @@ void WelcomePage::resizeEvent(QResizeEvent *event)
 
     QFrame::resizeEvent(event);
 
+    updateSidebarLayout();
+}
+
+void WelcomePage::showEvent(QShowEvent *event)
+{
+    QFrame::showEvent(event);
+
+    // The final window geometry may not be known until the widget is shown
+    // (especially on macOS with restored window positions). Ensure the
+    // sidebar layout adapts to the actual available space.
     updateSidebarLayout();
 }
 
@@ -349,12 +250,6 @@ void WelcomePage::updateSidebarLayout()
         welcome_ui_->learnSectionCard->setLinksCollapsed(true);
         welcome_ui_->tipsSectionCard->setCompactMode(true);
     }
-}
-
-void WelcomePage::setCaptureFilterText(const QString capture_filter)
-{
-    welcome_ui_->captureSectionFilterComboBox->lineEdit()->setText(capture_filter);
-    captureFilterTextEdited(capture_filter);
 }
 
 void WelcomePage::showCaptureFilesContextMenu(QPoint pos)
@@ -389,17 +284,11 @@ void WelcomePage::showCaptureFilesContextMenu(QPoint pos)
     recent_ctx_menu->popup(welcome_ui_->openFileSectionRecentList->viewport()->mapToGlobal(pos));
 }
 
-void WelcomePage::on_captureSectionLabel_clicked()
-{
-    mainApp->doTriggerMenuItem(MainApplication::CaptureOptionsDialog);
-}
-
-
 void WelcomePage::updateStyleSheets()
 {
     QString welcome_ss = QStringLiteral(
                 "WelcomePage {"
-                "  padding: 1em;"
+                "  padding: 0;"
                 " }"
                 "WelcomePage, QAbstractItemView {"
                 "  background-color: palette(base);"
@@ -469,7 +358,6 @@ void WelcomePage::updateStyleSheets()
         welcome_ui_->titleSectionFlavorLabel->setText(flavor_);
         welcome_ui_->titleSectionFlavorLabel->setStyleSheet(flavor_ss);
     }
-    welcome_ui_->captureSectionLabel->setStyleSheet(title_button_ss);
     welcome_ui_->openFileSectionLabel->setStyleSheet(title_button_ss);
 
     welcome_ui_->openFileSectionRecentList->setStyleSheet(
@@ -484,6 +372,8 @@ void WelcomePage::updateStyleSheets()
             "  padding-bottom: 0;"
             "}"
             );
+
+    /* LearnCardWidget and CaptureCardWidget manage their own stylesheets */
 }
 
 void WelcomePage::on_openFileSectionLabel_clicked()

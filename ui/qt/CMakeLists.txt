@@ -19,6 +19,7 @@ set(WIRESHARK_WIDGET_HEADERS
 	widgets/additional_toolbar.h
 	widgets/apply_line_edit.h
 	widgets/base_data_source_view.h
+	widgets/capture_card_widget.h
 	widgets/capture_filter_combo.h
 	widgets/capture_filter_edit.h
 	widgets/clickable_label.h
@@ -304,6 +305,7 @@ endif()
 set(WIRESHARK_WIDGET_SRCS
 	widgets/additional_toolbar.cpp
 	widgets/apply_line_edit.cpp
+	widgets/capture_card_widget.cpp
 	widgets/capture_filter_combo.cpp
 	widgets/capture_filter_edit.cpp
 	widgets/clickable_label.cpp
@@ -783,6 +785,8 @@ GENERATE_JSON_TR_STRINGS(
 
 # Stylesheet resources
 set(STYLESHEET_QSS_FILES
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/capture-card-dark.qss
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/capture-card-light.qss
 	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/learn-card-dark.qss
 	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/learn-card-light.qss
 )

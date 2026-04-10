@@ -19,6 +19,7 @@ set(WIRESHARK_WIDGET_HEADERS
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/additional_toolbar.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/apply_line_edit.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/base_data_source_view.h
+	${CMAKE_SOURCE_DIR}/ui/qt/widgets/capture_card_widget.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/capture_filter_combo.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/capture_filter_edit.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/clickable_label.h
@@ -283,6 +284,7 @@ set (STRATOSHARK_QT_HEADERS
 set(WIRESHARK_WIDGET_SRCS
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/additional_toolbar.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/apply_line_edit.cpp
+	${CMAKE_SOURCE_DIR}/ui/qt/widgets/capture_card_widget.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/capture_filter_combo.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/capture_filter_edit.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/clickable_label.cpp
@@ -618,6 +620,7 @@ set(WIRESHARK_QT_UI
 )
 
 set(WIRESHARK_QT_WIDGETS_UI
+	${CMAKE_SOURCE_DIR}/ui/qt/widgets/capture_card_widget.ui
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/learn_card_widget.ui
 )
 
@@ -697,6 +700,8 @@ GENERATE_JSON_TR_STRINGS(
 
 # Stylesheet resources
 set(STYLESHEET_QSS_FILES
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/capture-card-dark.qss
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/capture-card-light.qss
 	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/learn-card-dark.qss
 	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/learn-card-light.qss
 )

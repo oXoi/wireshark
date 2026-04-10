@@ -128,71 +128,17 @@
          </layout>
         </item>
         <item>
-         <layout class="QVBoxLayout" name="captureSectionLayout">
-          <item>
-           <widget class="ClickableLabel" name="captureSectionLabel">
-            <property name="accessibleName">
-             <string>Capture</string>
-            </property>
-            <property name="accessibleDescription">
-             <string>Start a new capture session</string>
-            </property>
-            <property name="toolTip">
-             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Capture live packets from your network.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-            </property>
-            <property name="text">
-             <string>&lt;h2&gt;Capture&lt;/h2&gt;</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <layout class="QHBoxLayout" name="captureSectionFilterRowLayout">
-            <item>
-             <widget class="QLabel" name="captureSectionFilterLabel">
-              <property name="text">
-               <string>…using this filter:</string>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="CaptureFilterCombo" name="captureSectionFilterComboBox">
-              <property name="editable">
-               <bool>true</bool>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QPushButton" name="captureSectionInterfaceTypeButton">
-              <property name="text">
-               <string/>
-              </property>
-             </widget>
-            </item>
-           </layout>
-          </item>
-          <item>
-           <widget class="InterfaceFrame" name="captureSectionInterfaceFrame">
-            <property name="sizePolicy">
-             <sizepolicy hsizetype="Preferred" vsizetype="MinimumExpanding">
-              <horstretch>0</horstretch>
-              <verstretch>0</verstretch>
-             </sizepolicy>
-            </property>
-            <property name="accessibleName">
-             <string>Interface list</string>
-            </property>
-            <property name="accessibleDescription">
-             <string>List of available capture interfaces</string>
-            </property>
-            <property name="frameShape">
-             <enum>QFrame::Shape::StyledPanel</enum>
-            </property>
-            <property name="frameShadow">
-             <enum>QFrame::Shadow::Raised</enum>
-            </property>
-           </widget>
-          </item>
-         </layout>
+         <widget class="CaptureCardWidget" name="captureSectionCard">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Preferred" vsizetype="MinimumExpanding">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="frameShape">
+           <enum>QFrame::Shape::NoFrame</enum>
+          </property>
+         </widget>
         </item>
        </layout>
       </widget>
@@ -299,15 +245,10 @@
    <container>1</container>
   </customwidget>
   <customwidget>
-   <class>InterfaceFrame</class>
+   <class>CaptureCardWidget</class>
    <extends>QFrame</extends>
-   <header>interface_frame.h</header>
+   <header>widgets/capture_card_widget.h</header>
    <container>1</container>
-  </customwidget>
-  <customwidget>
-   <class>CaptureFilterCombo</class>
-   <extends>QComboBox</extends>
-   <header>widgets/capture_filter_combo.h</header>
   </customwidget>
   <customwidget>
    <class>ClickableLabel</class>

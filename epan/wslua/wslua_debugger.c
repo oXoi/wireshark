@@ -327,6 +327,7 @@ void wslua_debugger_register_ui_callback(wslua_debugger_ui_update_cb_t cb)
  */
 void wslua_debugger_continue(void)
 {
+    g_mutex_lock(&debugger.mutex);
     debugger.state = WSLUA_DEBUGGER_RUNNING;
     debugger.step_mode = false;
     /* Clear temp breakpoint */
@@ -337,6 +338,7 @@ void wslua_debugger_continue(void)
     }
     debugger.temporary_breakpoint.active = false;
     debugger.paused_L = NULL;
+    g_mutex_unlock(&debugger.mutex);
     wslua_debugger_update_hook();
 }
 
@@ -352,6 +354,7 @@ void wslua_debugger_run_to_line(const char *file_path, int64_t line)
     {
         return;
     }
+    g_mutex_lock(&debugger.mutex);
     if (debugger.temporary_breakpoint.file_path)
     {
         g_free(debugger.temporary_breakpoint.file_path);
@@ -361,6 +364,7 @@ void wslua_debugger_run_to_line(const char *file_path, int64_t line)
     debugger.temporary_breakpoint.active = true;
 
     debugger.state = WSLUA_DEBUGGER_RUNNING;
+    g_mutex_unlock(&debugger.mutex);
     wslua_debugger_set_enabled(true);
     wslua_debugger_update_hook();
 }
@@ -377,6 +381,7 @@ void wslua_debugger_run_to_line(const char *file_path, int64_t line)
  */
 void wslua_debugger_step(void)
 {
+    g_mutex_lock(&debugger.mutex);
     /* Clear temp breakpoint since we're stepping */
     if (debugger.temporary_breakpoint.file_path)
     {
@@ -388,6 +393,7 @@ void wslua_debugger_step(void)
 
     debugger.step_mode = true;
     debugger.state = WSLUA_DEBUGGER_RUNNING;
+    g_mutex_unlock(&debugger.mutex);
     wslua_debugger_update_hook();
 }
 
@@ -607,11 +613,13 @@ static void wslua_debug_hook(lua_State *L, lua_Debug *debug_info)
     bool hit = false;
 
     /* Step mode: pause at every line */
+    g_mutex_lock(&debugger.mutex);
     if (debugger.step_mode)
     {
         hit = true;
         debugger.step_mode = false; /* One-shot */
     }
+    g_mutex_unlock(&debugger.mutex);
 
     /* Check regular breakpoints */
     if (!hit)
@@ -636,14 +644,19 @@ static void wslua_debug_hook(lua_State *L, lua_Debug *debug_info)
     }
 
     /* Check temp breakpoint */
-    if (!hit && debugger.temporary_breakpoint.active &&
-        wslua_debugger_breakpoint_matches(&debugger.temporary_breakpoint,
-                                          norm_source,
-                                          (int64_t)debug_info->currentline))
+    if (!hit)
     {
-        hit = true;
-        /* Temp breakpoint is one-shot */
-        debugger.temporary_breakpoint.active = false;
+        g_mutex_lock(&debugger.mutex);
+        if (debugger.temporary_breakpoint.active &&
+            wslua_debugger_breakpoint_matches(&debugger.temporary_breakpoint,
+                                              norm_source,
+                                              (int64_t)debug_info->currentline))
+        {
+            hit = true;
+            /* Temp breakpoint is one-shot */
+            debugger.temporary_breakpoint.active = false;
+        }
+        g_mutex_unlock(&debugger.mutex);
     }
 
     if (hit)
@@ -1019,12 +1032,29 @@ wslua_variable_t *wslua_debugger_get_variables(const char *path,
     }
     else if (g_strcmp0(path, "Globals") == 0)
     {
-        /* Globals (_G) */
+        /* Globals (_G) — limit to avoid freezing the UI */
+#define WSLUA_GLOBALS_DISPLAY_LIMIT 500
+        unsigned globals_count = 0;
         lua_pushglobaltable(target_L);
         /* Iterate table */
         lua_pushnil(target_L);
         while (lua_next(target_L, -2) != 0)
         {
+            if (globals_count >= WSLUA_GLOBALS_DISPLAY_LIMIT)
+            {
+                lua_pop(target_L, 2); /* key + value */
+                /* Add a sentinel entry so the user knows the list is truncated */
+                wslua_variable_t truncated;
+                truncated.name = g_strdup_printf(
+                    "... (%u+ globals, showing first %u)",
+                    WSLUA_GLOBALS_DISPLAY_LIMIT, WSLUA_GLOBALS_DISPLAY_LIMIT);
+                truncated.type = g_strdup("");
+                truncated.value = g_strdup("");
+                truncated.can_expand = false;
+                g_array_append_val(variables_array, truncated);
+                break;
+            }
+
             wslua_variable_t variable;
 
             if (lua_type(target_L, -2) == LUA_TSTRING)
@@ -1045,6 +1075,7 @@ wslua_variable_t *wslua_debugger_get_variables(const char *path,
 
             g_array_append_val(variables_array, variable);
             lua_pop(target_L, 1);
+            globals_count++;
         }
         lua_pop(target_L, 1); /* Table */
     }
@@ -1281,10 +1312,35 @@ bool wslua_debugger_is_paused(void)
 }
 
 /**
+ * @brief Maximum number of Lua instructions allowed during evaluation.
+ *
+ * This prevents infinite loops from hanging Wireshark.  The limit is
+ * generous enough for any reasonable inspection expression but will
+ * abort runaway code within a fraction of a second.
+ */
+#define WSLUA_EVAL_INSTRUCTION_LIMIT 1000000
+
+/**
+ * @brief Hook that aborts evaluation when the instruction limit is reached.
+ */
+static void wslua_eval_timeout_hook(lua_State *L, lua_Debug *ar _U_)
+{
+    luaL_error(L, "Evaluation aborted: instruction limit (%d) exceeded "
+               "(possible infinite loop)",
+               WSLUA_EVAL_INSTRUCTION_LIMIT);
+}
+
+/**
  * @brief Evaluate a Lua expression in the context of the paused debugger.
  *
  * This function evaluates the given expression using the paused Lua state.
  * It supports the '=' prefix shorthand: "=expr" becomes "return expr".
+ *
+ * An instruction-count hook is installed for the duration of the call so
+ * that infinite loops are caught instead of hanging Wireshark.
+ *
+ * WARNING: The expression runs in the live dissector Lua state.  Modifying
+ * globals (e.g. _G.some_proto = nil) can corrupt ongoing analysis.
  *
  * @param expression The Lua expression to evaluate.
  * @param error_msg Output pointer for error message (caller frees).
@@ -1345,8 +1401,19 @@ char *wslua_debugger_evaluate(const char *expression, char **error_msg)
         return NULL;
     }
 
+    /*
+     * Install an instruction-count hook to abort runaway code.
+     * We check every 10000 instructions for efficiency.
+     */
+    lua_sethook(L, wslua_eval_timeout_hook, LUA_MASKCOUNT,
+                WSLUA_EVAL_INSTRUCTION_LIMIT);
+
     /* Execute the chunk */
     int call_result = lua_pcall(L, 0, LUA_MULTRET, 0);
+
+    /* Remove the timeout hook regardless of outcome */
+    lua_sethook(L, NULL, 0, 0);
+
     if (call_result != LUA_OK)
     {
         const char *lua_err = lua_tostring(L, -1);

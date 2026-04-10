@@ -1742,9 +1742,9 @@ void wslua_init(register_cb cb, void *client_data, const char* app_env_var_prefi
         lua_app_env_var_prefix = app_env_var_prefix;
     }
 
-    wslua_debugger_init(L);
-
     lua_atpanic(L,wslua_panic);
+
+    wslua_debugger_init(L);
 
     /*
      * The init_routines table (accessible by the user).

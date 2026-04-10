@@ -39,6 +39,7 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QPalette>
+#include <QPointer>
 #include <QScrollArea>
 #include <QSet>
 #include <QStandardPaths>
@@ -423,8 +424,9 @@ void LuaDebuggerDialog::createCollapsibleSections()
            "<b>Limitations:</b><ul>"
            "<li>Local variables cannot be modified directly (use "
            "<code>debug.setlocal()</code>)</li>"
-           "<li>No timeout protection for infinite loops</li>"
-           "<li>Changes to globals persist after Continue</li>"
+           "<li>Long-running expressions are automatically aborted</li>"
+           "<li><b>Warning:</b> Changes to globals persist and can affect "
+           "ongoing dissection</li>"
            "</ul>"));
     evalOutputEdit = new QPlainTextEdit();
     evalOutputEdit->setReadOnly(true);
@@ -496,10 +498,7 @@ LuaDebuggerDialog *LuaDebuggerDialog::instance(QWidget *parent)
 
 void LuaDebuggerDialog::handlePause(const char *file_path, int64_t line)
 {
-    QEventLoop loop;
-    eventLoop = &loop;
-
-    // Prevent deletion while in nested event loop
+    // Prevent deletion while in event loop
     setAttribute(Qt::WA_DeleteOnClose, false);
 
     // Bring to front
@@ -522,8 +521,38 @@ void LuaDebuggerDialog::handlePause(const char *file_path, int64_t line)
     variablesTree->clear();
     updateVariables(nullptr, QString());
 
-    // Enter nested event loop - blocks until Continue or dialog close
+    /*
+     * If an event loop is already running (e.g. we were called from onStep()
+     * which triggered an immediate re-pause), reuse it instead of nesting.
+     * The outer loop.exec() is still on the stack and will return when we
+     * eventually quit it via Continue or close.
+     */
+    if (eventLoop)
+    {
+        return;
+    }
+
+    QEventLoop loop;
+    eventLoop = &loop;
+
+    /*
+     * If the parent window is destroyed while we're paused (e.g. the
+     * application is shutting down), quit the event loop so the Lua
+     * call stack can unwind cleanly.
+     */
+    QPointer<QWidget> parentGuard(parentWidget());
+    QMetaObject::Connection parentConn;
+    if (parentGuard) {
+        parentConn = connect(parentGuard, &QObject::destroyed, &loop,
+                             &QEventLoop::quit);
+    }
+
+    // Enter event loop - blocks until Continue or dialog close
     loop.exec();
+
+    if (parentConn) {
+        disconnect(parentConn);
+    }
 
     // Restore delete-on-close behavior and clear event loop pointer
     eventLoop = nullptr;
@@ -546,18 +575,23 @@ void LuaDebuggerDialog::onStep()
     debuggerPaused = false;
     clearPausedStateUi();
 
-    // Capture and clear the event loop pointer BEFORE calling
-    // wslua_debugger_step(), because step() may immediately trigger a new
-    // handlePause() which creates a new event loop. We need to quit the current
-    // loop after the step call returns.
-    QEventLoop *loopToQuit = eventLoop;
-    eventLoop = nullptr;
-
+    /*
+     * Call wslua_debugger_step() which will immediately fire the line
+     * hook. If it hits a pause, handlePause() is called synchronously.
+     * handlePause() detects that eventLoop is already set and reuses
+     * it instead of nesting a new one — so the stack does NOT grow
+     * with each step.
+     */
     wslua_debugger_step();
 
-    if (loopToQuit)
+    /*
+     * If handlePause() was NOT called (e.g. step landed in C code
+     * and the hook didn't fire), we need to quit the event loop so
+     * the original handlePause() caller can return.
+     */
+    if (!debuggerPaused && eventLoop)
     {
-        loopToQuit->quit();
+        eventLoop->quit();
     }
 
     updateWidgets();
@@ -861,14 +895,23 @@ void LuaDebuggerDialog::updateVariables(QTreeWidgetItem *parent,
                 }
             }
         }
-        // Sort items alphabetically by name within this level
-        if (parent)
+        // Sort Globals alphabetically; preserve declaration order for
+        // Locals and Upvalues since that is more natural for debugging.
+        bool shouldSort = false;
+        if (!path.isEmpty())
         {
-            parent->sortChildren(0, Qt::AscendingOrder);
+            shouldSort = path.startsWith(QLatin1String("Globals"));
         }
-        else
+        if (shouldSort)
         {
-            variablesTree->sortItems(0, Qt::AscendingOrder);
+            if (parent)
+            {
+                parent->sortChildren(0, Qt::AscendingOrder);
+            }
+            else
+            {
+                variablesTree->sortItems(0, Qt::AscendingOrder);
+            }
         }
 
         wslua_debugger_free_variables(variables, variableCount);

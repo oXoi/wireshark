@@ -50,7 +50,6 @@ protected slots:
 
 private:
     Ui::WelcomePage *welcome_ui_;
-    QString flavor_;
     QString show_in_str_;
 
     SplashOverlay *splash_overlay_;
@@ -62,7 +61,6 @@ signals:
 
 private slots:
     void appInitialized();
-    void setReleaseLabel();
     void showCaptureFilesContextMenu(QPoint pos);
     void applySidebarPreferences();
 };

@@ -65,6 +65,7 @@ set(WIRESHARK_WIDGET_HEADERS
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/traffic_tab.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/traffic_tree.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/traffic_types_list.h
+	${CMAKE_SOURCE_DIR}/ui/qt/widgets/welcome_header_widget.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/wireshark_file_dialog.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/customplot.h
 )
@@ -330,6 +331,7 @@ set(WIRESHARK_WIDGET_SRCS
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/traffic_tab.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/traffic_tree.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/traffic_types_list.cpp
+	${CMAKE_SOURCE_DIR}/ui/qt/widgets/welcome_header_widget.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/wireshark_file_dialog.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/customplot.cpp
 )
@@ -622,6 +624,7 @@ set(WIRESHARK_QT_UI
 set(WIRESHARK_QT_WIDGETS_UI
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/capture_card_widget.ui
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/learn_card_widget.ui
+	${CMAKE_SOURCE_DIR}/ui/qt/widgets/welcome_header_widget.ui
 )
 
 if(HAVE_PCAP_REMOTE)
@@ -704,6 +707,8 @@ set(STYLESHEET_QSS_FILES
 	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/capture-card-light.qss
 	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/learn-card-dark.qss
 	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/learn-card-light.qss
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/welcome-header-dark.qss
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/welcome-header-light.qss
 )
 set(_stylesheet_qrc_files "")
 foreach(_qss ${STYLESHEET_QSS_FILES})

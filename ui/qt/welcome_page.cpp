@@ -21,7 +21,6 @@
 #include <ui/qt/utils/tango_colors.h>
 #include <ui/qt/utils/color_utils.h>
 #include <ui/qt/utils/qt_ui_utils.h>
-#include <ui/qt/utils/software_update.h>
 #include <ui/qt/models/recentcapturefiles_list_model.h>
 #include <ui/qt/utils/workspace_state.h>
 #include <ui/qt/widgets/capture_card_widget.h>
@@ -44,7 +43,6 @@
 WelcomePage::WelcomePage(QWidget *parent) :
     QFrame(parent),
     welcome_ui_(new Ui::WelcomePage),
-    flavor_(tr(VERSION_FLAVOR)),
     #ifdef Q_OS_MAC
     show_in_str_(tr("Show in Finder")),
     #else
@@ -149,16 +147,8 @@ void WelcomePage::interfaceSelected()
     welcome_ui_->captureSectionCard->interfaceSelected();
 }
 
-void WelcomePage::setReleaseLabel()
-{
-    QString full_release = tr("Version: %1").arg(application_get_vcs_version_info());
-
-    welcome_ui_->titleSectionVersionLabel->setText(full_release);
-}
-
 void WelcomePage::appInitialized()
 {
-    setReleaseLabel();
     applySidebarPreferences();
 
     splash_overlay_->fadeOut();
@@ -201,8 +191,6 @@ bool WelcomePage::event(QEvent *event)
     case QEvent::LanguageChange:
     {
         welcome_ui_->retranslateUi(this);
-        welcome_ui_->titleSectionFlavorLabel->setText(flavor_);
-        setReleaseLabel();
         break;
     }
     default:
@@ -401,18 +389,6 @@ void WelcomePage::updateStyleSheets()
 #endif
     setStyleSheet(welcome_ss);
 
-    QString banner_ss = QStringLiteral(
-                "QLabel {"
-                "  border-radius: 0.33em;"
-                "  color: %1;"
-                "  background-color: %2;"
-                "  padding: 0.33em;"
-                "}"
-                )
-            .arg(QColor(tango_aluminium_6).name())   // Text color
-            .arg(QColor(tango_sky_blue_2).name());   // Background color
-    welcome_ui_->titleSectionBannerLabel->setStyleSheet(banner_ss);
-
     QString title_button_ss = QStringLiteral(
             "QLabel {"
             "  color: %1;"
@@ -424,32 +400,6 @@ void WelcomePage::updateStyleSheets()
             .arg(QColor(tango_aluminium_4).name())   // Text color
             .arg(QColor(tango_sky_blue_4).name());   // Hover color
 
-    // XXX Is there a better term than "flavor"? Provider? Admonition (a la DocBook)?
-    // Release_source?
-    // Typical use cases are automated builds from wireshark.org and private,
-    // not-for-redistribution packages.
-    if (flavor_.isEmpty()) {
-        welcome_ui_->titleSectionFlavorLabel->hide();
-    } else {
-        // If needed there are a couple of ways we can make this customizable.
-        // - Add one or more classes, e.g. "note" or "warning" similar to
-        //   SyntaxLineEdit, which we can then expose vi #defines.
-        // - Just expose direct color values via #defines.
-        QString flavor_ss = QStringLiteral(
-                    "QLabel {"
-                    "  border-radius: 0.25em;"
-                    "  color: %1;"
-                    "  background-color: %2;"
-                    "  padding: 0.25em;"
-                    "}"
-                    )
-                .arg("white") //   Text color
-                .arg("#2c4bc4"); // Background color. Matches capture start button.
-        //            .arg(QColor(tango_butter_5).name());      // "Warning" background
-
-        welcome_ui_->titleSectionFlavorLabel->setText(flavor_);
-        welcome_ui_->titleSectionFlavorLabel->setStyleSheet(flavor_ss);
-    }
     welcome_ui_->openFileSectionLabel->setStyleSheet(title_button_ss);
 
     welcome_ui_->openFileSectionRecentList->setStyleSheet(

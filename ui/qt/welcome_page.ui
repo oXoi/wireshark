@@ -19,58 +19,26 @@
    </property>
 
    <property name="leftMargin">
-    <number>38</number>
+    <number>0</number>
    </property>
    <property name="topMargin">
     <number>12</number>
    </property>
    <property name="rightMargin">
-    <number>38</number>
+    <number>0</number>
    </property>
    <property name="bottomMargin">
     <number>0</number>
    </property>
    <item>
-    <layout class="QVBoxLayout" name="titleSectionLayout">
-     <item>
-      <layout class="QHBoxLayout" name="titleSectionRowLayout">
-       <item>
-        <widget class="QLabel" name="titleSectionBannerLabel">
-         <property name="text">
-          <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:large;&quot;&gt;Welcome to Wireshark&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <spacer name="titleSectionBannerSpacer">
-         <property name="orientation">
-          <enum>Qt::Orientation::Horizontal</enum>
-         </property>
-         <property name="sizeHint" stdset="0">
-          <size>
-           <width>40</width>
-           <height>20</height>
-          </size>
-         </property>
-        </spacer>
-       </item>
-       <item>
-        <widget class="QLabel" name="titleSectionFlavorLabel">
-         <property name="alignment">
-          <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
-         </property>
-        </widget>
-       </item>
-      </layout>
-     </item>
-     <item>
-      <widget class="QLabel" name="titleSectionVersionLabel">
-       <property name="text">
-        <string/>
-       </property>
-      </widget>
-     </item>
-    </layout>
+    <widget class="WelcomeHeaderWidget" name="welcomeHeaderWidget">
+     <property name="sizePolicy">
+      <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+       <horstretch>0</horstretch>
+       <verstretch>0</verstretch>
+      </sizepolicy>
+     </property>
+    </widget>
    </item>
    <item>
     <layout class="QHBoxLayout" name="contentAreaLayout">
@@ -299,6 +267,12 @@
    <class>LearnCardWidget</class>
    <extends>QFrame</extends>
    <header>widgets/learn_card_widget.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>WelcomeHeaderWidget</class>
+   <extends>QWidget</extends>
+   <header>widgets/welcome_header_widget.h</header>
    <container>1</container>
   </customwidget>
  </customwidgets>

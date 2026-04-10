@@ -67,6 +67,7 @@ set(WIRESHARK_WIDGET_HEADERS
 	widgets/traffic_tab.h
 	widgets/traffic_tree.h
 	widgets/traffic_types_list.h
+	widgets/welcome_header_widget.h
 	widgets/wireless_timeline.h
 	widgets/wireshark_file_dialog.h
 	widgets/customplot.h
@@ -353,6 +354,7 @@ set(WIRESHARK_WIDGET_SRCS
 	widgets/traffic_tab.cpp
 	widgets/traffic_tree.cpp
 	widgets/traffic_types_list.cpp
+	widgets/welcome_header_widget.cpp
 	widgets/wireless_timeline.cpp
 	widgets/wireshark_file_dialog.cpp
 	widgets/customplot.cpp
@@ -704,6 +706,7 @@ set(WIRESHARK_QT_UI
 set(WIRESHARK_QT_WIDGETS_UI
 	widgets/capture_card_widget.ui
 	widgets/learn_card_widget.ui
+	widgets/welcome_header_widget.ui
 )
 
 if(HAVE_PCAP_REMOTE)
@@ -790,6 +793,8 @@ set(STYLESHEET_QSS_FILES
 	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/capture-card-light.qss
 	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/learn-card-dark.qss
 	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/learn-card-light.qss
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/welcome-header-dark.qss
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/welcome-header-light.qss
 )
 set(_stylesheet_qrc_files "")
 foreach(_qss ${STYLESHEET_QSS_FILES})

@@ -87,6 +87,11 @@ WelcomeHeaderWidget::WelcomeHeaderWidget(QWidget *parent) :
     }
 }
 
+WelcomeHeaderWidget::~WelcomeHeaderWidget()
+{
+    delete header_ui_;
+}
+
 void WelcomeHeaderWidget::updateSoftwareUpdateInfo()
 {
     if (!SoftwareUpdate::plattformSupported())

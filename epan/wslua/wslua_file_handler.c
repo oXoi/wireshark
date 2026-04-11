@@ -313,8 +313,31 @@ wslua_filehandler_seek_read_packet(wtap *wth, int64_t seek_off, wtap_rec *rec,
     File *fp = NULL;
     CaptureInfo *fc = NULL;
     FrameInfo *fi = NULL;
+    bool reentrant = in_routine;
+    int reentrant_ref = LUA_NOREF;
 
-    INIT_FILEHANDLER_ROUTINE(seek_read,false,err,err_info);
+    if (reentrant) {
+        /*
+         * Re-entrant call while the debugger is paused inside another
+         * file-handler callback.  Create a temporary Lua thread whose
+         * stack is independent from the paused pcall on fh->L.
+         */
+        if (!fh->L || fh->seek_read_ref == LUA_NOREF) {
+            return true;
+        }
+        L = lua_newthread(fh->L);
+        reentrant_ref = luaL_ref(fh->L, LUA_REGISTRYINDEX);
+        lua_settop(L, 0);
+        push_error_handler(L, "seek_read routine");
+        lua_rawgeti(L, LUA_REGISTRYINDEX, fh->seek_read_ref);
+        if (!lua_isfunction(L, -1)) {
+            lua_settop(L, 0);
+            luaL_unref(fh->L, LUA_REGISTRYINDEX, reentrant_ref);
+            return true;
+        }
+    } else {
+        INIT_FILEHANDLER_ROUTINE(seek_read,false,err,err_info);
+    }
 
     /* Reset errno */
     if (err) {
@@ -346,7 +369,11 @@ wslua_filehandler_seek_read_packet(wtap *wth, int64_t seek_off, wtap_rec *rec,
         CASE_ERROR("seek_read",err,err_info)
     }
 
-    END_FILEHANDLER_ROUTINE();
+    if (reentrant) {
+        luaL_unref(fh->L, LUA_REGISTRYINDEX, reentrant_ref);
+    } else {
+        END_FILEHANDLER_ROUTINE();
+    }
 
     (*fp)->expired = true;
     (*fc)->expired = true;

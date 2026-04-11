@@ -146,6 +146,9 @@ QVariant ProtoTreeModel::data(const QModelIndex &index, int role) const
             ws_warning("Unhandled severity flag: %u", finfo.flag(PI_SEVERITY_MASK));
         }
         if (finfo.headerInfo().type == FT_PROTOCOL) {
+            if (QApplication::palette().window() == QApplication::palette().base()) {
+                return QApplication::palette().alternateBase();
+            }
             return QApplication::palette().window();
         }
         return QApplication::palette().base();

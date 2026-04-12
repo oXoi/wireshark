@@ -177,6 +177,7 @@ class LuaDebuggerDialog : public GeometryStateDialog
     QIcon folderIcon;
     QIcon fileIcon;
     bool debuggerPaused;
+    bool reloadDeferred;
 
     // Collapsible sections (created programmatically)
     CollapsibleSection *variablesSection;

@@ -318,14 +318,26 @@ wslua_filehandler_seek_read_packet(wtap *wth, int64_t seek_off, wtap_rec *rec,
 
     if (reentrant) {
         /*
-         * Re-entrant call while the debugger is paused inside another
-         * file-handler callback.  Create a temporary Lua thread whose
+         * Re-entrant call while another file-handler callback is already
+         * active on the C call stack (e.g. dissectIdle's QTimer fired
+         * inside the Lua debugger's nested QEventLoop while paused in
+         * a seek_read callback).  Create a temporary Lua thread whose
          * stack is independent from the paused pcall on fh->L.
          */
         if (!fh->L || fh->seek_read_ref == LUA_NOREF) {
             return true;
         }
         L = lua_newthread(fh->L);
+        /*
+         * lua_newthread() inherits the debug hook from the parent
+         * state (all Lua versions).  We MUST disable it on this
+         * thread to prevent the debugger from re-entering
+         * handlePause() / wslua_debug_hook() while we are already
+         * paused in an outer seek_read.  Without this, stepping or
+         * breakpoint hits on the re-entrant thread corrupt
+         * debugger.paused_L and crash when the outer pause resumes.
+         */
+        lua_sethook(L, NULL, 0, 0);
         reentrant_ref = luaL_ref(fh->L, LUA_REGISTRYINDEX);
         lua_settop(L, 0);
         push_error_handler(L, "seek_read routine");
@@ -1359,6 +1371,19 @@ int FileHandler_register(lua_State* L) {
 }
 
 int wslua_deregister_filehandlers(lua_State* L _U_) {
+    /*
+     * Reset the in_routine guard.  This flag is set to true by
+     * INIT_FILEHANDLER_ROUTINE before lua_pcall and cleared by
+     * END_FILEHANDLER_ROUTINE after.  During a Lua plugin reload,
+     * wslua_reload_plugins() may run while in_routine is still true
+     * (e.g. when a deferred reload fires after a debugger-paused
+     * filehandler callback).  If we don't reset it here, the
+     * subsequent wslua_init() will fail to register new FileHandlers
+     * ("cannot be registered during reading/writing callback
+     * functions"), causing cf_reload() to fail and crash.
+     */
+    in_routine = false;
+
     for (GSList *it = registered_file_handlers; it; it = it->next) {
         FileHandler fh = (FileHandler)it->data;
         wslua_deregister_filehandler_work(fh);

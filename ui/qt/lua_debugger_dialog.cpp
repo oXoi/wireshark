@@ -134,12 +134,12 @@ static LuaDebuggerUiCallbackRegistrar g_luaDebuggerUiCallbackRegistrar;
 LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     : GeometryStateDialog(parent), ui(new Ui::LuaDebuggerDialog),
       eventLoop(nullptr), enabledCheckBox(nullptr), breakpointTabsPrimed(false),
-      debuggerPaused(false), variablesSection(nullptr), stackSection(nullptr),
-      filesSection(nullptr), breakpointsSection(nullptr), evalSection(nullptr),
-      settingsSection(nullptr), variablesTree(nullptr), stackTree(nullptr),
-      fileTree(nullptr), breakpointsTree(nullptr), evalInputEdit(nullptr),
-      evalOutputEdit(nullptr), evalButton(nullptr), evalClearButton(nullptr),
-      themeComboBox(nullptr)
+      debuggerPaused(false), reloadDeferred(false), variablesSection(nullptr),
+      stackSection(nullptr), filesSection(nullptr), breakpointsSection(nullptr),
+      evalSection(nullptr), settingsSection(nullptr), variablesTree(nullptr),
+      stackTree(nullptr), fileTree(nullptr), breakpointsTree(nullptr),
+      evalInputEdit(nullptr), evalOutputEdit(nullptr), evalButton(nullptr),
+      evalClearButton(nullptr), themeComboBox(nullptr)
 {
     _instance = this;
     setAttribute(Qt::WA_DeleteOnClose);
@@ -557,6 +557,21 @@ void LuaDebuggerDialog::handlePause(const char *file_path, int64_t line)
     // Restore delete-on-close behavior and clear event loop pointer
     eventLoop = nullptr;
     setAttribute(Qt::WA_DeleteOnClose, true);
+
+    /*
+     * If a Lua plugin reload was requested while we were paused,
+     * schedule it now that the Lua/C call stack has fully unwound.
+     * We must NOT schedule it from inside the event loop (via
+     * QTimer::singleShot) because the timer can fire before the
+     * loop exits, running cf_close/wslua_reload_plugins while
+     * cf_read is still on the C call stack.
+     */
+    if (reloadDeferred) {
+        reloadDeferred = false;
+        if (mainApp) {
+            mainApp->reloadLuaPluginsDelayed();
+        }
+    }
 }
 
 void LuaDebuggerDialog::onContinue()
@@ -1271,6 +1286,22 @@ void LuaDebuggerDialog::onLuaReloadCallback()
     LuaDebuggerDialog *dialog = _instance;
     if (dialog)
     {
+        /*
+         * If the debugger was paused, the UI layer called
+         * wslua_debugger_notify_reload() which disabled the debugger
+         * (continuing execution) and invoked this callback.
+         * Exit the nested event loop so the Lua call stack can unwind.
+         * handlePause() will schedule a deferred reload afterwards.
+         */
+        if (dialog->debuggerPaused && dialog->eventLoop)
+        {
+            dialog->debuggerPaused = false;
+            dialog->clearPausedStateUi();
+            dialog->reloadDeferred = true;
+            dialog->eventLoop->quit();
+            return;
+        }
+
         /*
          * Reload all script files from disk.
          * This must happen BEFORE Lua executes any code.
@@ -1988,31 +2019,26 @@ void LuaDebuggerDialog::onReloadLuaPlugins()
     }
 
     /*
-     * If the debugger is currently paused, resume execution first.
-     * Reloading Lua plugins while the debugger is paused inside a
-     * Lua hook can crash Wireshark because the Lua state is torn
-     * down while a call is still on the stack.
+     * If the debugger is currently paused, disable it (which continues
+     * execution), signal the event loop to exit, and let handlePause()
+     * schedule a deferred reload after the Lua call stack unwinds.
      */
     if (debuggerPaused)
     {
-        resumeDebuggerAndExitLoop();
+        wslua_debugger_notify_reload();
+        /* onLuaReloadCallback() has already set reloadDeferred,
+         * cleared paused UI, and quit the event loop. */
         updateWidgets();
+        return;
     }
 
     /*
-     * Trigger Lua plugin reload.
-     *
-     * This calls wslua_reload_plugins() which in turn calls our
-     * onLuaReloadCallback() to reload script files from disk before
-     * the Lua interpreter re-executes them.
-     *
-     * Note: We use the MainApplication's signal to trigger the reload
-     * so that all the proper cleanup and reload logic is executed
-     * (close dialogs, deregister protocols, etc.)
+     * Not paused — trigger the reload directly via the delayed
+     * path so it runs after this dialog method returns.
      */
     if (mainApp)
     {
-        emit mainApp->reloadLuaPlugins();
+        mainApp->reloadLuaPluginsDelayed();
     }
 }
 

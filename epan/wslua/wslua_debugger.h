@@ -271,12 +271,20 @@ extern "C"
         wslua_debugger_reload_callback_t callback);
 
     /**
-     * @brief Notify registered listeners that a reload is about to happen.
+     * @brief Notify the debugger that a reload is about to happen.
      *
-     * Called internally by wslua_reload_plugins() before reloading.
-     * This function invokes the registered reload callback if any.
+     * Saves the debugger enabled state, disables the debugger, detaches
+     * from the current Lua state, and calls the reload callback so the
+     * UI can refresh script files from disk.
+     *
+     * If the debugger is paused, it is disabled (which continues
+     * execution) and the reload callback is invoked so the UI can exit
+     * its nested event loop and schedule a deferred reload.
+     *
+     * @return true if the caller should proceed with the reload;
+     *         false if the reload was deferred (debugger was paused).
      */
-    WS_DLL_PUBLIC void wslua_debugger_notify_reload(void);
+    WS_DLL_PUBLIC bool wslua_debugger_notify_reload(void);
 
     /**
      * @brief Callback type for post-reload notification.
@@ -303,9 +311,18 @@ extern "C"
      * @brief Notify registered listeners that a reload has completed.
      *
      * Called internally by wslua_reload_plugins() after reloading.
-     * This function invokes the registered post-reload callback if any.
+     * Clears the reload_in_progress flag and invokes the registered
+     * post-reload callback.  Does NOT re-enable the debugger.
      */
     WS_DLL_PUBLIC void wslua_debugger_notify_post_reload(void);
+
+    /**
+     * @brief Re-enable the debugger after a reload + cf_reload cycle.
+     *
+     * If the debugger was enabled before the reload, re-enable it.
+     * Must be called AFTER cf_reload / redissectPackets completes.
+     */
+    WS_DLL_PUBLIC void wslua_debugger_restore_after_reload(void);
 
     /**
      * @brief Evaluate a Lua expression in the context of the paused debugger.

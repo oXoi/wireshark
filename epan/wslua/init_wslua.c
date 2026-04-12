@@ -1976,27 +1976,27 @@ void wslua_early_cleanup(void) {
     wslua_deregister_protocols(L);
 }
 
-void wslua_reload_plugins (register_cb cb, void *client_data, const char* app_env_var_prefix) {
+bool wslua_reload_plugins (register_cb cb, void *client_data, const char* app_env_var_prefix) {
     const funnel_ops_t* ops = funnel_get_funnel_ops();
+
+    /*
+     * Notify the debugger that a reload is starting.  This saves the
+     * enabled state, disables the hook, detaches from the Lua state,
+     * and fires the reload callback so the UI reloads script files.
+     *
+     * If the debugger was paused, it returns false — Lua is still on
+     * the C call stack and destroying the state would crash.  The UI
+     * has been told to exit its nested event loop and schedule a
+     * deferred reload once the call stack unwinds.
+     */
+    if (!wslua_debugger_notify_reload())
+        return false;
 
     if (cb)
         (*cb)(RA_LUA_DEREGISTER, NULL, client_data);
 
     if (ops->close_dialogs)
         ops->close_dialogs();
-
-    /*
-     * Notify the debugger that a reload is about to happen.
-     *
-     * CRITICAL: This must be called BEFORE wslua_cleanup() and the
-     * subsequent wslua_init(). The debugger UI needs to reload all
-     * open script files from disk BEFORE Lua executes any code.
-     *
-     * This ensures that if a breakpoint is hit during the reload,
-     * the debugger displays the current version of the script
-     * (which the user may have edited since the last load).
-     */
-    wslua_debugger_notify_reload();
 
     wslua_deregister_heur_dissectors(L);
     wslua_deregister_protocols(L);
@@ -2011,13 +2011,21 @@ void wslua_reload_plugins (register_cb cb, void *client_data, const char* app_en
     wslua_init(cb, client_data, app_env_var_prefix);    /* reinitialize */
 
     /*
-     * Notify the debugger that the reload has completed.
+     * Signal the debugger that reload is complete.  This clears the
+     * reload_in_progress flag and fires the post-reload UI callback
+     * so the file tree is refreshed with newly loaded scripts.
      *
-     * This is called AFTER wslua_init() has loaded all plugins.
-     * The debugger UI can now refresh its file tree with the
-     * newly loaded scripts.
+     * The debugger is NOT re-enabled here — it is re-enabled later
+     * by the UI via wslua_reload_done() once
+     * cf_reload / redissect has finished.
      */
     wslua_debugger_notify_post_reload();
+
+    return true;
+}
+
+void wslua_reload_done(void) {
+    wslua_debugger_restore_after_reload();
 }
 
 void wslua_cleanup(void) {

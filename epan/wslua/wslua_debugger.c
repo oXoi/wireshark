@@ -30,6 +30,8 @@ typedef struct
     bool mutex_initialized;
     wslua_breakpoint_t temporary_breakpoint;
     bool step_mode; /**< When true, pause at the next line hook */
+    bool was_enabled_before_reload; /**< Saved state across plugin reload */
+    bool reload_in_progress; /**< Suppress auto-enable during reload */
 } wslua_debugger_t;
 
 static wslua_debugger_t debugger = {
@@ -41,7 +43,9 @@ static wslua_debugger_t debugger = {
     {0}, /* mutex */
     false,
     {NULL, 0, false}, /* temporary_breakpoint */
-    false             /* step_mode */
+    false,            /* step_mode */
+    false,            /* was_enabled_before_reload */
+    false             /* reload_in_progress */
 };
 
 /* Breakpoints (in-memory, persisted by Qt side) */
@@ -217,6 +221,21 @@ void wslua_debugger_init(lua_State *L)
          * state. */
 
         initialized = true;
+    }
+
+    /*
+     * During a reload, do NOT auto-enable the debugger here.
+     * The hook would fire inside cf_reload → cf_read → dissectIdle,
+     * potentially entering a nested event loop while deep in the
+     * reload call stack.  The callers will call
+     * wslua_debugger_notify_post_reload() after cf_reload completes.
+     */
+    if (debugger.reload_in_progress)
+    {
+        /* Don't auto-enable: the hook would fire during
+         * cf_reload / redissect and re-enter the event loop.
+         * wslua_debugger_restore_after_reload() handles this. */
+        return;
     }
 
     /* Check if we should auto-enable based on active breakpoints */
@@ -703,10 +722,15 @@ static void wslua_debug_hook(lua_State *L, lua_Debug *debug_info)
                                         (int64_t)debug_info->currentline);
         }
 
-        /* Wait until state changes to RUNNING */
-        /* The UI callback runs a nested event loop and only returns
-         * after the user continues execution, so we don't need to
-         * spin here - the callback blocks until ready to resume. */
+        /*
+         * After the UI callback returns (nested event loop exited),
+         * execution resumes normally. If a reload was requested while
+         * we were paused, the reload was deferred — the UI quit the
+         * event loop and scheduled a delayed reload. The hook simply
+         * returns here, allowing the Lua script to finish its current
+         * execution naturally. The deferred reload will run once the
+         * Lua call stack has fully unwound.
+         */
     }
 }
 
@@ -1240,34 +1264,40 @@ void wslua_debugger_register_reload_callback(
 }
 
 /**
- * @brief Notify registered listeners that a reload is about to happen.
+ * @brief Notify the debugger that a reload is about to happen.
  *
- * This function is called by wslua_reload_plugins() BEFORE any Lua
- * scripts are unloaded or reloaded. It allows the debugger UI to
- * reload script files from disk so that when a breakpoint is hit
- * during the reload, the debugger shows the current (potentially
- * edited) version of the script.
+ * Saves the debugger enabled state, disables the debugger, detaches
+ * from the current Lua state, and calls the reload callback so the
+ * UI can refresh script files from disk.
  *
- * Without this notification, the following scenario would be confusing:
- * 1. User edits a Lua script externally
- * 2. User presses Ctrl+Shift+L to reload plugins
- * 3. Breakpoint is hit during reload
- * 4. Debugger shows OLD code (cached from before the edit)
+ * If the debugger is paused, it is disabled (which continues execution)
+ * and the reload callback is invoked so the UI can exit its nested
+ * event loop and schedule a deferred reload.
  *
- * With this notification:
- * 1. User edits a Lua script externally
- * 2. User presses Ctrl+Shift+L to reload plugins
- * 3. wslua_debugger_notify_reload() is called
- * 4. Debugger UI reloads all open script files from disk
- * 5. Breakpoint is hit during reload
- * 6. Debugger shows CURRENT code (just reloaded from disk)
+ * @return true if the caller should proceed with the reload immediately;
+ *         false if the reload was deferred (debugger was paused).
  */
-void wslua_debugger_notify_reload(void)
+bool wslua_debugger_notify_reload(void)
 {
+    if (!debugger.reload_in_progress)
+    {
+        debugger.reload_in_progress = true;
+        debugger.was_enabled_before_reload = debugger.enabled;
+    }
+
+    if (debugger.enabled)
+    {
+        wslua_debugger_set_enabled(false);
+    }
+
+    debugger.L = NULL;
+
     if (reload_callback)
     {
         reload_callback();
     }
+
+    return !wslua_debugger_is_paused();
 }
 
 /**
@@ -1290,13 +1320,40 @@ void wslua_debugger_register_post_reload_callback(
  * @brief Notify listeners that reload has completed.
  *
  * Called by wslua_reload_plugins() AFTER wslua_init() completes.
- * The file tree can now be refreshed with newly loaded scripts.
+ * Clears the reload_in_progress flag and fires the post-reload UI
+ * callback so the file tree is refreshed with newly loaded scripts.
+ *
+ * The debugger is NOT re-enabled here.  The UI must call
+ * wslua_debugger_restore_after_reload() once cf_reload / redissect
+ * has finished, to avoid the debug hook firing while packets are
+ * still being re-read.
  */
 void wslua_debugger_notify_post_reload(void)
 {
+    debugger.reload_in_progress = false;
+
     if (post_reload_callback)
     {
         post_reload_callback();
+    }
+}
+
+/**
+ * @brief Re-enable the debugger after a reload + cf_reload cycle.
+ *
+ * If the debugger was enabled before the reload, re-enable it now
+ * that the file has been fully re-read.  This must be called AFTER
+ * cf_reload / redissectPackets completes.
+ */
+void wslua_debugger_restore_after_reload(void)
+{
+    if (debugger.was_enabled_before_reload)
+    {
+        debugger.was_enabled_before_reload = false;
+        if (!debugger.enabled && debugger.L)
+        {
+            wslua_debugger_set_enabled(true);
+        }
     }
 }
 

@@ -834,13 +834,7 @@ get_interface_list_ws(int *err, char **err_str)
 		return NULL;
 	}
 
-	return get_interface_list_findalldevs(true, err, err_str);
-}
-
-GList*
-get_interface_list_ss(int* err, char** err_str)
-{
-	return get_interface_list_findalldevs(false, err, err_str);
+	return get_interface_list_findalldevs(err, err_str);
 }
 
 /*

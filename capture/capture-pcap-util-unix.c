@@ -43,13 +43,7 @@ get_remote_interface_list(const char *hostname, const char *port,
 GList *
 get_interface_list_ws(int *err, char **err_str)
 {
-	return get_interface_list_findalldevs(true, err, err_str);
-}
-
-GList*
-get_interface_list_ss(int* err, char** err_str)
-{
-	return get_interface_list_findalldevs(false, err, err_str);
+	return get_interface_list_findalldevs(err, err_str);
 }
 
 /*

@@ -929,9 +929,9 @@ if_info_ip(if_info_t *if_info, pcap_if_t *d)
 
 #ifdef HAVE_PCAP_REMOTE
 GList *
-get_interface_list_findalldevs_ex(const char *hostname, const char *port,
-			  int auth_type, const char *username,
-			  const char *passwd, int *err, char **err_str)
+get_remote_interface_list_common(const char *hostname, const char *port,
+				 int auth_type, const char *username,
+				 const char *passwd, int *err, char **err_str)
 {
 	char source[PCAP_BUF_SIZE];
 	struct pcap_rmtauth auth;
@@ -1018,7 +1018,7 @@ get_interface_list_findalldevs_ex(const char *hostname, const char *port,
 #endif
 
 GList *
-get_interface_list_findalldevs(int *err, char **err_str)
+get_local_interface_list(int *err, char **err_str)
 {
 	GList  *il = NULL;
 	pcap_if_t *alldevs, *dev;
@@ -1054,7 +1054,7 @@ get_interface_list_findalldevs(int *err, char **err_str)
 }
 
 GList*
-get_interface_list_ss(int* err, char** err_str)
+get_local_interface_list_ss(int* err, char** err_str)
 {
 	/*
 	 * This is for Stratoshark/strato, so we don't look for

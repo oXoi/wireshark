@@ -591,7 +591,9 @@ update-mime-database %{_datadir}/mime &> /dev/null || :
 %exclude %{_bindir}/dftest
 %exclude %{_bindir}/idl2wrs
 # Don't pick up the stratoshark or strato binaries here
+%if %{with stratoshark}
 %exclude %{_bindir}/strato*
+%endif
 %{_bindir}/*
 
 # This generates a warning because dumpcap is listed twice. That's

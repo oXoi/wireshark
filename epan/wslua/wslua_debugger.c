@@ -301,6 +301,11 @@ static void wslua_debugger_update_hook(void)
         {
             should_hook = true;
         }
+
+        if (!should_hook && debugger.step_mode)
+        {
+            should_hook = true;
+        }
     }
     g_mutex_unlock(&debugger.mutex);
 
@@ -731,6 +736,20 @@ static void wslua_debug_hook(lua_State *L, lua_Debug *debug_info)
          * execution naturally. The deferred reload will run once the
          * Lua call stack has fully unwound.
          */
+
+        /*
+         * Re-install the hook on this thread (L) so that step_mode
+         * and breakpoints can fire on subsequent lines within the
+         * same dissector call.  The hook was disabled on L above to
+         * prevent re-entrancy during the nested event loop; now that
+         * the event loop has exited we need it back.  Note: L may be
+         * a coroutine thread created by lua_newthread(), which is
+         * distinct from debugger.L (the main state).
+         */
+        if (debugger.enabled)
+        {
+            lua_sethook(L, wslua_debug_hook, LUA_MASKLINE, 0);
+        }
     }
 }
 

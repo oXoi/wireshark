@@ -1008,6 +1008,19 @@ void WiresharkMainWindow::closeEvent(QCloseEvent *event) {
         return;
     }
 
+#ifdef HAVE_LUA
+    /*
+     * If the Lua debugger is paused we are inside a nested event loop
+     * with the Lua dissector still on the C call stack.
+     */
+    if (wslua_debugger_is_paused()) {
+        LuaDebuggerDialog *dbg = LuaDebuggerDialog::instance();
+        if (dbg) {
+            dbg->close();
+        }
+    }
+#endif
+
     QString before_what(tr(" before quitting"));
     if (!tryClosingCaptureFile(before_what, Quit)) {
         event->ignore();

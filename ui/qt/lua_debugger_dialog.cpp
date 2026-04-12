@@ -629,10 +629,10 @@ void LuaDebuggerDialog::onDebuggerToggled(bool checked)
 
 void LuaDebuggerDialog::closeEvent(QCloseEvent *event)
 {
+    /* Disable the debugger so breakpoints won't fire and reopen the
+     * dialog after it has been closed. */
+    wslua_debugger_set_enabled(false);
     resumeDebuggerAndExitLoop();
-    /* Settings (including breakpoints) are persisted by storeDialogSettings()
-     * which is called from the destructor */
-    updateWidgets();
 
     GeometryStateDialog::closeEvent(event);
 }

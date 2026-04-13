@@ -2716,7 +2716,7 @@ ddictionary_process_avp(xmlNodePtr avp, GSList** avps)
 			element->type = xmlGetProp(current_node, (const xmlChar*)"type-name");
 		}
 		else if (xmlStrcmp(current_node->name, (const xmlChar*)"enum") == 0) {
-			ddict_avp_enum_t* avp_enum = g_new(ddict_avp_enum_t, 1);
+			ddict_avp_enum_t* avp_enum = g_new0(ddict_avp_enum_t, 1);
 
 			avp_enum->name = xmlGetProp(current_node, (const xmlChar*)"name");
 			code = xmlGetProp(current_node, (const xmlChar*)"code");

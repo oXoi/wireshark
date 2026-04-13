@@ -180,7 +180,7 @@ static int get_unix_sdl_type(const char *ifname)
 	freeifaddrs(ifap);
 	return type;
 }
-#else
+#elif !defined(_WIN32)
 static int get_unix_sdl_type(const char *ifname _U_)
 {
 	return -1;

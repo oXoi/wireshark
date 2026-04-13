@@ -2679,7 +2679,7 @@ ddictionary_print_avp(void* data, void* user_data)
 static bool
 ddictionary_process_command(xmlNodePtr command, GSList** commands)
 {
-	ddict_command_t* element = g_new(ddict_command_t, 1);
+	ddict_command_t* element = g_new0(ddict_command_t, 1);
 	element->name = xmlGetProp(command, (const xmlChar*)"name");
 	element->vendor = xmlGetProp(command, (const xmlChar*)"vendor-id");
 	xmlChar* code = xmlGetProp(command, (const xmlChar*)"code");

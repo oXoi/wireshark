@@ -240,6 +240,8 @@ void wslua_debugger_init(lua_State *L)
 
     /* Check if we should auto-enable based on active breakpoints */
     bool has_active = false;
+    ensure_breakpoints_initialized();
+    g_mutex_lock(&debugger.mutex);
     for (unsigned i = 0; i < breakpoints_array->len; i++)
     {
         wslua_breakpoint_t *bp =
@@ -250,6 +252,7 @@ void wslua_debugger_init(lua_State *L)
             break;
         }
     }
+    g_mutex_unlock(&debugger.mutex);
 
     if (has_active)
     {
@@ -710,8 +713,10 @@ static void wslua_debug_hook(lua_State *L, lua_Debug *debug_info)
 
     if (hit)
     {
+        g_mutex_lock(&debugger.mutex);
         debugger.state = WSLUA_DEBUGGER_PAUSED;
         debugger.paused_L = L;
+        g_mutex_unlock(&debugger.mutex);
 
         if (debugger.ui_update_callback)
         {
@@ -1254,14 +1259,19 @@ bool wslua_debugger_get_breakpoint(unsigned idx, const char **file_path,
 {
     ensure_breakpoints_initialized();
 
+    g_mutex_lock(&debugger.mutex);
     if (idx >= breakpoints_array->len)
+    {
+        g_mutex_unlock(&debugger.mutex);
         return false;
+    }
 
     wslua_breakpoint_t *bp =
         &g_array_index(breakpoints_array, wslua_breakpoint_t, idx);
     *file_path = bp->file_path;
     *line = bp->line;
     *active = bp->active;
+    g_mutex_unlock(&debugger.mutex);
     return true;
 }
 

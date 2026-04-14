@@ -1316,7 +1316,7 @@ void LuaDebuggerDialog::onLuaReloadCallback()
          * called in onLuaPostReloadCallback() AFTER plugins are loaded,
          * so new scripts appear in the file tree.
          */
-        if (dialog->ui && dialog->ui->codeTabWidget)
+        if (dialog->ui->codeTabWidget)
         {
             const qint32 tabCount =
                 static_cast<qint32>(dialog->ui->codeTabWidget->count());
@@ -1374,7 +1374,7 @@ void LuaDebuggerDialog::onScriptLoadedCallback(const char *file_path)
 
 void LuaDebuggerDialog::reloadAllScriptFiles()
 {
-    if (!ui || !ui->codeTabWidget)
+    if (!ui->codeTabWidget)
     {
         return;
     }
@@ -1404,7 +1404,7 @@ void LuaDebuggerDialog::reloadAllScriptFiles()
 
 void LuaDebuggerDialog::applyCodeViewThemes()
 {
-    if (!ui || !ui->codeTabWidget)
+    if (!ui->codeTabWidget)
     {
         return;
     }
@@ -1699,7 +1699,7 @@ void LuaDebuggerDialog::openInitialBreakpointFiles(
 
 void LuaDebuggerDialog::configureVariablesTreeColumns()
 {
-    if (!ui || !variablesTree || !variablesTree->header())
+    if (!variablesTree || !variablesTree->header())
     {
         return;
     }
@@ -1715,7 +1715,7 @@ void LuaDebuggerDialog::configureVariablesTreeColumns()
 
 void LuaDebuggerDialog::configureStackTreeColumns()
 {
-    if (!ui || !stackTree || !stackTree->header())
+    if (!stackTree || !stackTree->header())
     {
         return;
     }
@@ -1731,11 +1731,11 @@ void LuaDebuggerDialog::configureStackTreeColumns()
 
 void LuaDebuggerDialog::clearPausedStateUi()
 {
-    if (ui && variablesTree)
+    if (variablesTree)
     {
         variablesTree->clear();
     }
-    if (ui && stackTree)
+    if (stackTree)
     {
         stackTree->clear();
     }
@@ -1759,7 +1759,7 @@ void LuaDebuggerDialog::resumeDebuggerAndExitLoop()
 
 void LuaDebuggerDialog::onVariablesContextMenuRequested(const QPoint &pos)
 {
-    if (!ui || !variablesTree)
+    if (!variablesTree)
     {
         return;
     }
@@ -1800,7 +1800,7 @@ void LuaDebuggerDialog::onVariablesContextMenuRequested(const QPoint &pos)
 
 void LuaDebuggerDialog::clearAllCodeHighlights()
 {
-    if (!ui || !ui->codeTabWidget)
+    if (!ui->codeTabWidget)
     {
         return;
     }
@@ -1850,7 +1850,7 @@ void LuaDebuggerDialog::applyMonospaceFonts(const QFont &font)
         }
     }
 
-    if (ui && ui->codeTabWidget)
+    if (ui->codeTabWidget)
     {
         const qint32 tabCount = static_cast<qint32>(ui->codeTabWidget->count());
         for (qint32 tabIndex = 0; tabIndex < tabCount; ++tabIndex)

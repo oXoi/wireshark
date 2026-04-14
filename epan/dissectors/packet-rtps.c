@@ -13223,38 +13223,39 @@ static int dissect_parameter_sequence(proto_tree *tree, packet_info *pinfo, tvbu
 
     /* This way, we can include vendor specific dissections without modifying the main ones */
 
-      if (!dissect_parameter_sequence_v1(rtps_parameter_tree, pinfo, tvb, param_item, param_len_item,
-        offset, encoding, size, param_length, parameter, version, type_mapping_object, coherent_set_entity_info_object)) {
-          if ((version < 0x0200) ||
-            !dissect_parameter_sequence_v2(rtps_parameter_tree, pinfo, tvb, param_item, param_len_item,
+      bool handled;
+      handled = dissect_parameter_sequence_v1(rtps_parameter_tree, pinfo, tvb, param_item, param_len_item,
+        offset, encoding, size, param_length, parameter, version, type_mapping_object, coherent_set_entity_info_object);
+      if (!handled && version >= 0x0200) {
+          handled = dissect_parameter_sequence_v2(rtps_parameter_tree, pinfo, tvb, param_item, param_len_item,
             offset, encoding, param_length, parameter,
-            pStatusInfo, vendor_id, type_mapping_object, coherent_set_entity_info_object)) {
-              if (param_length > 0) {
-                proto_tree_add_item(rtps_parameter_tree, hf_rtps_parameter_data, tvb,
-                        offset, param_length, ENC_NA);
-              }
-          }
+            pStatusInfo, vendor_id, type_mapping_object, coherent_set_entity_info_object);
       }
 
     switch (vendor_id) {
       case RTPS_VENDOR_RTI_DDS:
       case RTPS_VENDOR_RTI_DDS_MICRO: {
-        dissect_parameter_sequence_rti_dds(rtps_parameter_tree, pinfo, tvb,
+        handled |= dissect_parameter_sequence_rti_dds(rtps_parameter_tree, pinfo, tvb,
             param_item, param_len_item, offset, encoding, param_length, parameter, type_mapping_object, is_inline_qos, vendor_id);
         break;
       }
       case RTPS_VENDOR_TOC: {
-        dissect_parameter_sequence_toc(rtps_parameter_tree, pinfo, tvb,
+        handled |= dissect_parameter_sequence_toc(rtps_parameter_tree, pinfo, tvb,
             param_item, param_len_item, offset, encoding, param_length, parameter);
         break;
       }
       case RTPS_VENDOR_ADL_DDS: {
-        dissect_parameter_sequence_adl(rtps_parameter_tree, pinfo, tvb,
+        handled |= dissect_parameter_sequence_adl(rtps_parameter_tree, pinfo, tvb,
             param_item, param_len_item, offset, encoding, param_length, parameter);
         break;
       }
       default:
         break;
+    }
+    /* Show raw bytes only if no dissector recognized this parameter */
+    if (!handled && param_length > 0) {
+        proto_tree_add_item(rtps_parameter_tree, hf_rtps_parameter_data, tvb,
+                offset, param_length, ENC_NA);
     }
 
     rtps_util_insert_type_mapping_in_registry(pinfo, type_mapping_object);

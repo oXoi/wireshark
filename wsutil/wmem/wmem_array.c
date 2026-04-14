@@ -86,7 +86,7 @@ wmem_array_grow(wmem_array_t *array, const unsigned to_add)
         }
     }
 
-    if (new_alloc_count == array->alloc_count) {
+    if (new_alloc_count <= array->alloc_count) {
         return;
     }
 

@@ -18234,6 +18234,14 @@ static bool dissect_rtps(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, in
         is_domain_id_calculated = true;
       }
       doffset = (pinfo->destport - PORT_BASE - domain_id * DOMAIN_GAIN);
+      /* RTPX messages are always sent to PORT_BASE regardless of the
+       * domain_id propagated via PID_DOMAIN_ID, so the destination port
+       * does not encode a participant index. Force doffset to 0 so the
+       * dissector shows MULTICAST_METATRAFFIC without a garbage
+       * participant_idx caused by the resulting negative doffset. */
+      if (magic_number == RTPX_MAGIC_NUMBER) {
+        doffset = 0;
+      }
       if (doffset == 0) {
         nature = PORT_METATRAFFIC_MULTICAST;
       }

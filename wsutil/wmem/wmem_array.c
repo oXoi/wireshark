@@ -77,7 +77,10 @@ wmem_array_grow(wmem_array_t *array, const unsigned to_add)
     uint8_t *new_buf;
 
     new_alloc_count = array->alloc_count;
-    new_count = array->elem_count + to_add;
+    if (ckd_add(&new_count, array->elem_count, to_add)) {
+        ws_critical("Can't grow array (element count would overflow)!");
+        return false;
+    }
 
     while (new_alloc_count < new_count) {
         if (ckd_mul(&new_alloc_count, new_alloc_count, 2)) {

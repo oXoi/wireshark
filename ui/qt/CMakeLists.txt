@@ -308,6 +308,8 @@ if(LUA_FOUND)
 	list(APPEND WIRESHARK_QT_HEADERS
 		lua_debugger_code_view.h
 		lua_debugger_dialog.h
+		lua_debugger_find_frame.h
+		lua_debugger_goto_line_frame.h
 	)
 endif()
 
@@ -590,6 +592,8 @@ if(LUA_FOUND)
 	list(APPEND WIRESHARK_QT_SRC
 		lua_debugger_code_view.cpp
 		lua_debugger_dialog.cpp
+		lua_debugger_find_frame.cpp
+		lua_debugger_goto_line_frame.cpp
 	)
 endif()
 
@@ -735,6 +739,8 @@ endif()
 if(LUA_FOUND)
 	list(APPEND WIRESHARK_QT_UI
 		lua_debugger_dialog.ui
+		lua_debugger_find_frame.ui
+		lua_debugger_goto_line_frame.ui
 	)
 endif()
 

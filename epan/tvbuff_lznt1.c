@@ -67,7 +67,8 @@ uncompress_chunk(tvbuff_t *tvb, int offset, unsigned in_size, wmem_array_t *obuf
 					return false;
 				/* Must call grow first, to realloc the array
 				 * if needed. */
-				wmem_array_grow(obuf, match_len);
+                                if (!wmem_array_grow(obuf, match_len))
+                                    return false;
 				uint8_t *src;
 				for (j = 0; j < match_len / match_off; j++) {
 					src = wmem_array_index(obuf, out_start + out_off - match_off);

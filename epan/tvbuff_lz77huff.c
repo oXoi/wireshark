@@ -347,7 +347,8 @@ static bool do_uncompress(struct input *input,
 			/* Must call grow first, to realloc the array if needed
 			 * and avoid invalidating the pointers returned from
 			 * wmem_array_index. */
-			wmem_array_grow(obuf, length);
+                        if (!wmem_array_grow(obuf, length))
+                            return false;
 			uint8_t *src;
 			unsigned i;
 			for (i = 0; i < length / match_offset; i++) {

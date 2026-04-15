@@ -91,7 +91,8 @@ static bool do_uncompress(tvbuff_t *tvb, int offset, int in_size,
 			/* Must call grow first, to realloc the array first
 			 * if needed and avoid invalidating pointers returned
 			 * from wmem_array_index when appending. */
-			wmem_array_grow(obuf, match_len);
+                        if (!wmem_array_grow(obuf, match_len))
+                                return false;
 			for (i = 0; i < match_len / match_off; i++) {
 				src = wmem_array_index(obuf, wmem_array_get_count(obuf) - match_off);
 				wmem_array_append(obuf, src, match_off);

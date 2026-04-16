@@ -2612,19 +2612,28 @@ void LuaDebuggerDialog::updateEnabledCheckboxIcon()
 void LuaDebuggerDialog::updateStatusLabel()
 {
     const bool debuggerEnabled = wslua_debugger_is_enabled();
-    QString title = tr("Lua Debugger");
+    /* [*] is required for setWindowModified() to show an unsaved
+     * indicator in the title. */
+    QString title = QStringLiteral("[*]%1").arg(tr("Lua Debugger"));
+
+#ifdef Q_OS_MAC
+        // On macOS we separate with a unicode em dash
+        title += QString(" " UTF8_EM_DASH " ");
+#else
+        title += QString(" - ");
+#endif
 
     if (!debuggerEnabled)
     {
-        title += tr(" - Disabled");
+        title += tr("Disabled");
     }
     else if (debuggerPaused)
     {
-        title += tr(" - Paused");
+        title += tr("Paused");
     }
     else
     {
-        title += tr(" - Running");
+        title += tr("Running");
     }
 
     setWindowTitle(title);

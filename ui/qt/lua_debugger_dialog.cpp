@@ -216,7 +216,7 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     : GeometryStateDialog(parent), ui(new Ui::LuaDebuggerDialog),
       eventLoop(nullptr), enabledCheckBox(nullptr), breakpointTabsPrimed(false),
       debuggerPaused(false), reloadDeferred(false), variablesSection(nullptr),
-      stackSection(nullptr), filesSection(nullptr), breakpointsSection(nullptr),
+      stackSection(nullptr), breakpointsSection(nullptr), filesSection(nullptr),
       evalSection(nullptr), settingsSection(nullptr), variablesTree(nullptr),
       stackTree(nullptr), fileTree(nullptr), breakpointsTree(nullptr),
       evalInputEdit(nullptr), evalOutputEdit(nullptr), evalButton(nullptr),
@@ -520,16 +520,6 @@ void LuaDebuggerDialog::createCollapsibleSections()
     stackSection->setExpanded(true);
     splitter->addWidget(stackSection);
 
-    // --- Files Section ---
-    filesSection = new CollapsibleSection(tr("Files"), this);
-    fileTree = new QTreeWidget();
-    fileTree->setColumnCount(1);
-    fileTree->setHeaderLabels({tr("Files")});
-    fileTree->setRootIsDecorated(false);
-    filesSection->setContentWidget(fileTree);
-    filesSection->setExpanded(true);
-    splitter->addWidget(filesSection);
-
     // --- Breakpoints Section ---
     breakpointsSection = new CollapsibleSection(tr("Breakpoints"), this);
     breakpointsTree = new QTreeWidget();
@@ -540,6 +530,16 @@ void LuaDebuggerDialog::createCollapsibleSections()
     breakpointsSection->setContentWidget(breakpointsTree);
     breakpointsSection->setExpanded(true);
     splitter->addWidget(breakpointsSection);
+
+    // --- Files Section ---
+    filesSection = new CollapsibleSection(tr("Files"), this);
+    fileTree = new QTreeWidget();
+    fileTree->setColumnCount(1);
+    fileTree->setHeaderLabels({tr("Files")});
+    fileTree->setRootIsDecorated(false);
+    filesSection->setContentWidget(fileTree);
+    filesSection->setExpanded(true);
+    splitter->addWidget(filesSection);
 
     // --- Evaluate Section ---
     evalSection = new CollapsibleSection(tr("Evaluate"), this);
@@ -968,8 +968,12 @@ void LuaDebuggerDialog::updateBreakpoints()
             item->setData(0, BreakpointLineRole, static_cast<qlonglong>(line));
             item->setToolTip(0, tr("Enable or disable this breakpoint"));
             item->setText(1, QString::number(line));
+            const QString fileDisplayName = fileInfo.fileName();
             QString locationText =
-                QStringLiteral("%1:%2").arg(normalizedPath).arg(line);
+                QStringLiteral("%1:%2")
+                    .arg(fileDisplayName.isEmpty() ? normalizedPath
+                                                    : fileDisplayName)
+                    .arg(line);
             item->setText(2, locationText);
             item->setTextAlignment(2, Qt::AlignLeft | Qt::AlignVCenter);
 
@@ -1067,9 +1071,16 @@ void LuaDebuggerDialog::updateStack()
                 {
                     resolvedPath = filePath;
                 }
+                const QString fileDisplayName =
+                    QFileInfo(resolvedPath).fileName();
                 locationText = QStringLiteral("%1:%2")
-                                   .arg(resolvedPath)
+                                   .arg(fileDisplayName.isEmpty() ? resolvedPath
+                                                                 : fileDisplayName)
                                    .arg(stack[frameIndex].line);
+                item->setToolTip(
+                    1, QStringLiteral("%1:%2")
+                           .arg(resolvedPath)
+                           .arg(stack[frameIndex].line));
             }
             else
             {
@@ -2891,12 +2902,12 @@ void LuaDebuggerDialog::applyDialogSettings()
     if (stackSection)
         stackSection->setExpanded(
             settings_.value(SettingsKeys::SectionStack, true).toBool());
-    if (filesSection)
-        filesSection->setExpanded(
-            settings_.value(SettingsKeys::SectionFiles, false).toBool());
     if (breakpointsSection)
         breakpointsSection->setExpanded(
             settings_.value(SettingsKeys::SectionBreakpoints, true).toBool());
+    if (filesSection)
+        filesSection->setExpanded(
+            settings_.value(SettingsKeys::SectionFiles, false).toBool());
     if (evalSection)
         evalSection->setExpanded(
             settings_.value(SettingsKeys::SectionEval, false).toBool());
@@ -2963,10 +2974,10 @@ void LuaDebuggerDialog::storeDialogSettings()
         variablesSection ? variablesSection->isExpanded() : true;
     settings_[SettingsKeys::SectionStack] =
         stackSection ? stackSection->isExpanded() : true;
-    settings_[SettingsKeys::SectionFiles] =
-        filesSection ? filesSection->isExpanded() : false;
     settings_[SettingsKeys::SectionBreakpoints] =
         breakpointsSection ? breakpointsSection->isExpanded() : true;
+    settings_[SettingsKeys::SectionFiles] =
+        filesSection ? filesSection->isExpanded() : false;
     settings_[SettingsKeys::SectionEval] =
         evalSection ? evalSection->isExpanded() : false;
     settings_[SettingsKeys::SectionSettings] =

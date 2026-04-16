@@ -216,8 +216,8 @@ class LuaDebuggerDialog : public GeometryStateDialog
     // Collapsible sections (created programmatically)
     CollapsibleSection *variablesSection;
     CollapsibleSection *stackSection;
-    CollapsibleSection *filesSection;
     CollapsibleSection *breakpointsSection;
+    CollapsibleSection *filesSection;
     CollapsibleSection *evalSection;
     CollapsibleSection *settingsSection;
 

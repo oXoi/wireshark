@@ -122,9 +122,10 @@ constexpr qint32 BreakpointLineRole = static_cast<qint32>(Qt::UserRole + 3);
 constexpr qint32 StackItemFileRole = static_cast<qint32>(Qt::UserRole + 4);
 constexpr qint32 StackItemLineRole = static_cast<qint32>(Qt::UserRole + 5);
 constexpr qint32 StackItemNavigableRole = static_cast<qint32>(Qt::UserRole + 6);
-constexpr qint32 VariablePathRole = static_cast<qint32>(Qt::UserRole + 7);
-constexpr qint32 VariableTypeRole = static_cast<qint32>(Qt::UserRole + 8);
-constexpr qint32 VariableCanExpandRole = static_cast<qint32>(Qt::UserRole + 9);
+constexpr qint32 StackItemLevelRole = static_cast<qint32>(Qt::UserRole + 7);
+constexpr qint32 VariablePathRole = static_cast<qint32>(Qt::UserRole + 8);
+constexpr qint32 VariableTypeRole = static_cast<qint32>(Qt::UserRole + 9);
+constexpr qint32 VariableCanExpandRole = static_cast<qint32>(Qt::UserRole + 10);
 
 /** @brief Registers the UI callback with the Lua debugger core at load time. */
 class LuaDebuggerUiCallbackRegistrar
@@ -399,6 +400,8 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
 
     connect(stackTree, &QTreeWidget::itemDoubleClicked, this,
             &LuaDebuggerDialog::onStackItemDoubleClicked);
+    connect(stackTree, &QTreeWidget::currentItemChanged, this,
+            &LuaDebuggerDialog::onStackCurrentItemChanged);
 
     // Evaluate panel
     connect(evalButton, &QPushButton::clicked, this,
@@ -498,6 +501,14 @@ void LuaDebuggerDialog::createCollapsibleSections()
 
     // --- Variables Section ---
     variablesSection = new CollapsibleSection(tr("Variables"), this);
+    variablesSection->setToolTip(
+        tr("<p><b>Locals</b><br/>"
+           "Parameters and local variables for the selected stack frame.</p>"
+           "<p><b>Upvalues</b><br/>"
+           "Outer variables that this function actually uses from surrounding code. "
+           "Anything the function does not reference does not appear here.</p>"
+           "<p><b>Globals</b><br/>"
+           "Names from the global environment table.</p>"));
     variablesTree = new QTreeWidget();
     variablesTree->setColumnCount(3);
     variablesTree->setHeaderLabels({tr("Name"), tr("Value"), tr("Type")});
@@ -511,6 +522,9 @@ void LuaDebuggerDialog::createCollapsibleSections()
     stackTree->setColumnCount(2);
     stackTree->setHeaderLabels({tr("Function"), tr("Location")});
     stackTree->setRootIsDecorated(true);
+    stackTree->setToolTip(
+        tr("Select a row to inspect locals and upvalues for that frame. "
+           "Double-click a Lua frame to open its source location."));
     stackSection->setContentWidget(stackTree);
     stackSection->setExpanded(true);
     splitter->addWidget(stackSection);
@@ -655,6 +669,7 @@ void LuaDebuggerDialog::handlePause(const char *file_path, int64_t line)
     debuggerPaused = true;
     updateWidgets();
 
+    stackSelectionLevel = 0;
     updateStack();
     variablesTree->clear();
     updateVariables(nullptr, QString());
@@ -1024,14 +1039,29 @@ void LuaDebuggerDialog::updateBreakpoints()
 
 void LuaDebuggerDialog::updateStack()
 {
+    if (!stackTree)
+    {
+        return;
+    }
+
+    const bool signalsWereBlocked = stackTree->blockSignals(true);
     stackTree->clear();
+
     int32_t frameCount = 0;
     wslua_stack_frame_t *stack = wslua_debugger_get_stack(&frameCount);
-    if (stack)
+    QTreeWidgetItem *itemToSelect = nullptr;
+    if (stack && frameCount > 0)
     {
+        const int maxLevel = static_cast<int>(frameCount) - 1;
+        stackSelectionLevel = qBound(0, stackSelectionLevel, maxLevel);
+        wslua_debugger_set_variable_stack_level(
+            static_cast<int32_t>(stackSelectionLevel));
+
         for (int32_t frameIndex = 0; frameIndex < frameCount; ++frameIndex)
         {
             QTreeWidgetItem *item = new QTreeWidgetItem(stackTree);
+            item->setData(0, StackItemLevelRole,
+                            static_cast<qlonglong>(frameIndex));
             const char *rawSource = stack[frameIndex].source;
             const bool isLuaFrame = rawSource && rawSource[0] == '@';
             const QString functionName = QString::fromUtf8(
@@ -1072,11 +1102,57 @@ void LuaDebuggerDialog::updateStack()
                     palette().color(QPalette::Disabled, QPalette::Text);
                 item->setForeground(0, disabledColor);
                 item->setForeground(1, disabledColor);
-                item->setFlags(item->flags() & ~Qt::ItemIsSelectable);
+            }
+
+            if (frameIndex == stackSelectionLevel)
+            {
+                itemToSelect = item;
             }
         }
         wslua_debugger_free_stack(stack, frameCount);
     }
+    else
+    {
+        stackSelectionLevel = 0;
+        wslua_debugger_set_variable_stack_level(0);
+    }
+
+    if (itemToSelect)
+    {
+        stackTree->setCurrentItem(itemToSelect);
+    }
+    stackTree->blockSignals(signalsWereBlocked);
+}
+
+void LuaDebuggerDialog::refreshVariablesForCurrentStackFrame()
+{
+    if (!variablesTree || !debuggerPaused || !wslua_debugger_is_paused())
+    {
+        return;
+    }
+    variablesTree->clear();
+    updateVariables(nullptr, QString());
+}
+
+void LuaDebuggerDialog::onStackCurrentItemChanged(QTreeWidgetItem *current,
+                                                  QTreeWidgetItem *previous)
+{
+    Q_UNUSED(previous);
+    if (!stackTree || !current || !debuggerPaused ||
+        !wslua_debugger_is_paused())
+    {
+        return;
+    }
+
+    const int level = static_cast<int>(current->data(0, StackItemLevelRole).toLongLong());
+    if (level < 0 || level == stackSelectionLevel)
+    {
+        return;
+    }
+
+    stackSelectionLevel = level;
+    wslua_debugger_set_variable_stack_level(static_cast<int32_t>(level));
+    refreshVariablesForCurrentStackFrame();
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
@@ -2712,9 +2788,9 @@ void LuaDebuggerDialog::onEvaluate()
     evalOutputEdit->setTextCursor(cursor);
 
     // Update all views in case the expression modified state
+    updateStack();
     variablesTree->clear();
     updateVariables(nullptr, QString());
-    updateStack();
     refreshAvailableScripts();
 }
 

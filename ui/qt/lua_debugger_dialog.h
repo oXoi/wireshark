@@ -149,6 +149,9 @@ class LuaDebuggerDialog : public GeometryStateDialog
     void onReloadLuaPlugins();
     /** @brief Jump to the selected stack frame location. */
     void onStackItemDoubleClicked(QTreeWidgetItem *item, int column);
+    /** @brief Show Locals/Upvalues for the selected stack frame. */
+    void onStackCurrentItemChanged(QTreeWidgetItem *current,
+                                   QTreeWidgetItem *previous);
     /** @brief Reapply fonts when the application monospace font changes. */
     void onMonospaceFontUpdated(const QFont &font);
     /** @brief Keep find/go-to bars on the regular UI font size when zoom changes. */
@@ -209,6 +212,8 @@ class LuaDebuggerDialog : public GeometryStateDialog
     QIcon fileIcon;
     bool debuggerPaused;
     bool reloadDeferred;
+    /** @brief lua_getstack level for variables; kept in sync with stack list. */
+    int stackSelectionLevel;
 
     // Collapsible sections (created programmatically)
     CollapsibleSection *variablesSection;
@@ -235,6 +240,12 @@ class LuaDebuggerDialog : public GeometryStateDialog
 
     /** @brief Refresh the call stack tree from the debugger back-end. */
     void updateStack();
+    /**
+     * @brief Rebuild the variables tree after the stack frame for inspection
+     *        changed (same as clearing the tree and calling updateVariables at
+     *        the root).
+     */
+    void refreshVariablesForCurrentStackFrame();
     /**
      * @brief Populate the variables tree with locals, globals, or nested
      * tables.

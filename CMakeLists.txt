@@ -2985,13 +2985,19 @@ if(ENABLE_APPLICATION_BUNDLE)
 
 	# Add files to the Wireshark application bundle
 	# Wireshark.app/Contents
-	file(WRITE ${CMAKE_BINARY_DIR}/packaging/macosx/wireshark/PkgInfo "APPLWshk\n")
-	set(WIRESHARK_BUNDLE_CONTENTS_FILES
-		${CMAKE_BINARY_DIR}/packaging/macosx/wireshark/PkgInfo
-	)
-	set_source_files_properties(${WIRESHARK_BUNDLE_CONTENTS_FILES} PROPERTIES
-		MACOSX_PACKAGE_LOCATION .
-	)
+	if(CMAKE_CFG_INTDIR STREQUAL ".")
+		# Not Xcode
+		file(WRITE ${CMAKE_BINARY_DIR}/packaging/macosx/wireshark/PkgInfo "APPLWshk\n")
+		set(WIRESHARK_BUNDLE_CONTENTS_FILES
+			${CMAKE_BINARY_DIR}/packaging/macosx/wireshark/PkgInfo
+		)
+		set_source_files_properties(${WIRESHARK_BUNDLE_CONTENTS_FILES} PROPERTIES
+			MACOSX_PACKAGE_LOCATION .
+		)
+	else()
+		# Xcode seems to generate its own
+		set(WIRESHARK_BUNDLE_CONTENTS_FILES)
+	endif()
 
 	if(HAVE_LIQUID_GLASS_ICONS)
 		# Compile our Liquid Glass icons to an asset catalog
@@ -3094,13 +3100,19 @@ if(ENABLE_APPLICATION_BUNDLE)
 
 	# Add files to the Stratoshark application bundle
 	# Stratoshark.app/Contents
-	file(WRITE ${CMAKE_BINARY_DIR}/packaging/macosx/stratoshark/PkgInfo "APPLLgry\n")
-	set(STRATOSHARK_BUNDLE_CONTENTS_FILES
-		${CMAKE_BINARY_DIR}/packaging/macosx/stratoshark/PkgInfo
-	)
-	set_source_files_properties(${STRATOSHARK_BUNDLE_CONTENTS_FILES} PROPERTIES
-		MACOSX_PACKAGE_LOCATION .
-	)
+	if(CMAKE_CFG_INTDIR STREQUAL ".")
+		# Not Xcode
+		file(WRITE ${CMAKE_BINARY_DIR}/packaging/macosx/stratoshark/PkgInfo "APPLLgry\n")
+		set(STRATOSHARK_BUNDLE_CONTENTS_FILES
+			${CMAKE_BINARY_DIR}/packaging/macosx/stratoshark/PkgInfo
+		)
+		set_source_files_properties(${STRATOSHARK_BUNDLE_CONTENTS_FILES} PROPERTIES
+			MACOSX_PACKAGE_LOCATION .
+		)
+	else()
+		# Xcode seems to generate its own
+		set(STRATOSHARK_BUNDLE_CONTENTS_FILES)
+	endif()
 
 	# Stratoshark.app/Contents/Resources
 	set(STRATOSHARK_BUNDLE_RESOURCE_FILES

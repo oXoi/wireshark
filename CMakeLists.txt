@@ -425,6 +425,7 @@ include(UseMakeTaps)
 include(UseExecutableResources)
 include(UseAsn2Wrs)
 include(UseJsonTranslations)
+include(QrcBuilder)
 
 # The following snippet has been taken from
 # https://github.com/USESystemEngineeringBV/cmake-eclipse-helper/wiki/HowToWorkaroundIndexer
@@ -2312,7 +2313,7 @@ if (BUILD_stratoshark)
 	else()
 		list(APPEND STRATOSHARK_INSTALL_DIRS resources/share/stratoshark/profiles)
 	endif()
-		
+
 	set(STRATOSHARK_INSTALL_FILES
 		doc/ws.css
 		resources/share/stratoshark/colorfilters

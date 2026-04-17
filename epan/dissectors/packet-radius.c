@@ -1720,7 +1720,7 @@ dissect_attribute_value_pairs(proto_tree *tree, packet_info *pinfo, tvbuff_t *tv
 							vsa_buffer->key.vsa_type = avp_vsa_type;
 							vsa_buffer->seg_num = 1;
 							vsa_buffer->data = wmem_array_sized_new(pinfo->pool, 1, avp_vsa_len);
-							wmem_array_append(eap_buffer, tvb_get_ptr(tvb, offset, avp_vsa_len), avp_vsa_len);
+							wmem_array_append(vsa_buffer->data, tvb_get_ptr(tvb, offset, avp_vsa_len), avp_vsa_len);
 							wmem_map_insert(vsa_buffer_table, &(vsa_buffer->key), vsa_buffer);
 						}
 						proto_tree_add_item(avp_tree, hf_radius_vsa_fragment, tvb, offset, avp_vsa_len, ENC_NA);

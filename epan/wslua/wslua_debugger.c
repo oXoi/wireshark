@@ -166,8 +166,10 @@ static void wslua_debug_hook(lua_State *L, lua_Debug *debug_info);
 static void wslua_debugger_update_hook(void);
 static int wslua_debugger_count_stack_frames(lua_State *L);
 static void remove_breakpoint_at(unsigned idx);
-static int64_t wslua_debugger_count_table_entries(lua_State *L, int idx);
+static bool wslua_debugger_entry_is_hidden(lua_State *L);
+static int64_t wslua_debugger_count_visible_table_entries(lua_State *L, int idx);
 static char *wslua_debugger_describe_value(lua_State *L, int idx);
+static bool wslua_debugger_push_getters(lua_State *L, int idx);
 
 /**
  * @brief Ensure breakpoints array is initialized.
@@ -966,6 +968,55 @@ static bool wslua_debugger_push_function_for_ar(lua_State *L, lua_Debug *ar)
 }
 
 /**
+ * @brief Index the value at the stack top by a string key.
+ *
+ * Consumes the parent from the stack and pushes the resulting value on
+ * success (returns true). Supports regular tables (via lua_getfield) and
+ * wslua userdata by invoking the matching attribute getter via
+ * __getters. Returns false with the parent popped if traversal fails.
+ */
+static bool wslua_debugger_index_by_string(lua_State *L, const char *key)
+{
+    if (lua_istable(L, -1))
+    {
+        lua_getfield(L, -1, key);
+        lua_remove(L, -2);
+        return true;
+    }
+    if (lua_isuserdata(L, -1))
+    {
+        const int userdata_abs = lua_gettop(L);
+        if (!wslua_debugger_push_getters(L, userdata_abs))
+        {
+            lua_pop(L, 1); /* userdata */
+            return false;
+        }
+        /* Stack: ..., userdata, __getters */
+        lua_pushstring(L, key);
+        lua_rawget(L, -2);
+        /* Stack: ..., userdata, __getters, getter_or_nil */
+        if (!lua_iscfunction(L, -1))
+        {
+            lua_pop(L, 3); /* getter_or_nil, __getters, userdata */
+            return false;
+        }
+        lua_pushvalue(L, userdata_abs); /* self */
+        /* Stack: ..., userdata, __getters, getter, userdata */
+        if (lua_pcall(L, 1, 1, 0) != 0)
+        {
+            lua_pop(L, 3); /* error, __getters, userdata */
+            return false;
+        }
+        /* Stack: ..., userdata, __getters, result */
+        lua_remove(L, -2); /* __getters */
+        lua_remove(L, -2); /* userdata */
+        return true;
+    }
+    lua_pop(L, 1);
+    return false;
+}
+
+/**
  * @brief Lookup a variable path in Lua state.
  * @param L The Lua state.
  * @param path The path to lookup (e.g. "a.b").
@@ -1051,18 +1102,12 @@ static bool wslua_debugger_lookup_path(lua_State *L, const char *path,
             while (*end_ptr && *end_ptr != '.' && *end_ptr != '[')
                 end_ptr++;
             char *key = g_strndup(path_ptr, end_ptr - path_ptr);
-            if (lua_istable(L, -1))
+            const bool ok = wslua_debugger_index_by_string(L, key);
+            g_free(key);
+            if (!ok)
             {
-                lua_getfield(L, -1, key);
-                lua_remove(L, -2); /* Remove parent */
-            }
-            else
-            {
-                g_free(key);
-                lua_pop(L, 1);
                 return false;
             }
-            g_free(key);
             path_ptr = end_ptr;
         }
         else if (*path_ptr == '[')
@@ -1097,6 +1142,18 @@ static bool wslua_debugger_lookup_path(lua_State *L, const char *path,
                     lua_gettable(L, -2);
                 }
                 lua_remove(L, -2); /* Remove parent */
+                g_free(key_str);
+            }
+            else if (lua_isuserdata(L, -1))
+            {
+                /* Userdata indexing only makes sense with the attribute
+                 * name, so reuse the string getter path. */
+                const bool ok = wslua_debugger_index_by_string(L, key_str);
+                g_free(key_str);
+                if (!ok)
+                {
+                    return false;
+                }
             }
             else
             {
@@ -1104,7 +1161,6 @@ static bool wslua_debugger_lookup_path(lua_State *L, const char *path,
                 lua_pop(L, 1);
                 return false;
             }
-            g_free(key_str);
         }
         else
         {
@@ -1128,32 +1184,192 @@ static int wslua_debugger_abs_index(lua_State *L, int idx)
 #endif
 }
 
-static int64_t wslua_debugger_count_table_entries(lua_State *L, int idx)
+/**
+ * @brief Basic (non-recursive) entry filter for the Variables view.
+ *
+ * Hides function/method entries and the wslua __typeof marker that
+ * wslua_register_class stores on class tables. Operates on the
+ * (key, value) pair at stack positions (-2, -1).
+ */
+static bool wslua_debugger_basic_entry_is_hidden(lua_State *L)
+{
+    if (lua_type(L, -1) == LUA_TFUNCTION)
+    {
+        return true;
+    }
+    if (lua_type(L, -2) == LUA_TSTRING)
+    {
+        const char *key = lua_tostring(L, -2);
+        if (g_strcmp0(key, WSLUA_TYPEOF_FIELD) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief Count raw and visible entries of a table in a single pass.
+ *
+ * "Visible" uses the basic (non-recursive) filter so the cost stays O(n)
+ * and deep nesting does not blow up.
+ */
+static void wslua_debugger_basic_table_counts(lua_State *L, int idx,
+                                              int64_t *total,
+                                              int64_t *visible)
+{
+    const int tableIndex = wslua_debugger_abs_index(L, idx);
+    int64_t total_count = 0;
+    int64_t visible_count = 0;
+    lua_pushnil(L);
+    while (lua_next(L, tableIndex) != 0)
+    {
+        ++total_count;
+        if (!wslua_debugger_basic_entry_is_hidden(L))
+        {
+            ++visible_count;
+        }
+        lua_pop(L, 1);
+    }
+    if (total)
+    {
+        *total = total_count;
+    }
+    if (visible)
+    {
+        *visible = visible_count;
+    }
+}
+
+/**
+ * @brief Returns true if the (key, value) pair at stack positions
+ *        (-2, -1) should be hidden from the Variables view.
+ *
+ * Extends the basic filter by also hiding "namespace" tables whose
+ * contents are entirely functions/methods or wslua internals (for
+ * example Lua stdlib tables like @c string / @c table and wslua class
+ * tables such as @c Proto). An empty user-defined table is preserved
+ * because the raw count distinguishes it from a collapsed namespace.
+ */
+static bool wslua_debugger_entry_is_hidden(lua_State *L)
+{
+    if (wslua_debugger_basic_entry_is_hidden(L))
+    {
+        return true;
+    }
+    if (lua_type(L, -1) == LUA_TTABLE)
+    {
+        int64_t total = 0;
+        int64_t visible = 0;
+        wslua_debugger_basic_table_counts(L, -1, &total, &visible);
+        if (total > 0 && visible == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief Count only visible entries in a table (skipping functions,
+ *        wslua internals, and namespace tables that collapse to empty).
+ *
+ * The Variables view filters out functions and methods, so the displayed
+ * size and expandability should reflect the visible entries rather than
+ * the raw table length.
+ */
+static int64_t wslua_debugger_count_visible_table_entries(lua_State *L, int idx)
 {
     const int tableIndex = wslua_debugger_abs_index(L, idx);
     int64_t count = 0;
     lua_pushnil(L);
     while (lua_next(L, tableIndex) != 0)
     {
-        ++count;
+        if (!wslua_debugger_entry_is_hidden(L))
+        {
+            ++count;
+        }
         lua_pop(L, 1);
     }
     return count;
 }
 
+/**
+ * @brief Push the wslua __getters table for a userdata value onto the stack.
+ *
+ * Returns true with the __getters table at the top of the stack (the stack
+ * otherwise unchanged). Returns false with the stack unchanged when the
+ * value at @a idx is not a wslua userdata or has no getters table.
+ */
+static bool wslua_debugger_push_getters(lua_State *L, int idx)
+{
+    const int absIndex = wslua_debugger_abs_index(L, idx);
+    if (lua_type(L, absIndex) != LUA_TUSERDATA)
+    {
+        return false;
+    }
+    if (!lua_getmetatable(L, absIndex))
+    {
+        return false;
+    }
+    lua_pushstring(L, "__getters");
+    lua_rawget(L, -2);
+    if (!lua_istable(L, -1))
+    {
+        lua_pop(L, 2);
+        return false;
+    }
+    lua_remove(L, -2); /* Drop metatable, leave __getters on top */
+    return true;
+}
+
+/**
+ * @brief Count userdata attribute getters that are safe to display.
+ *
+ * Skips the sentinel __typeof entry and anything that is not a C function.
+ */
+static int64_t wslua_debugger_count_userdata_getters(lua_State *L, int idx)
+{
+    const int absIndex = wslua_debugger_abs_index(L, idx);
+    if (!wslua_debugger_push_getters(L, absIndex))
+    {
+        return 0;
+    }
+    int64_t count = 0;
+    lua_pushnil(L);
+    while (lua_next(L, -2) != 0)
+    {
+        if (lua_type(L, -2) == LUA_TSTRING && lua_iscfunction(L, -1))
+        {
+            const char *key = lua_tostring(L, -2);
+            if (g_strcmp0(key, WSLUA_TYPEOF_FIELD) != 0)
+            {
+                ++count;
+            }
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1); /* __getters */
+    return count;
+}
+
 static char *wslua_debugger_describe_value(lua_State *L, int idx)
 {
-    const int valueType = lua_type(L, idx);
+    const int absIndex = wslua_debugger_abs_index(L, idx);
+    const int valueType = lua_type(L, absIndex);
     if (valueType == LUA_TFUNCTION)
     {
+        /* Functions are filtered out of the Variables view; the empty
+         * string is kept for defensive callers that still reach here. */
         return g_strdup("");
     }
     if (valueType == LUA_TTABLE)
     {
-        const int64_t entryCount = wslua_debugger_count_table_entries(L, idx);
+        const int64_t entryCount =
+            wslua_debugger_count_visible_table_entries(L, absIndex);
         return g_strdup_printf("table[%" PRId64 "]", entryCount);
     }
-    const char *stringValue = luaL_tolstring(L, idx, NULL);
+    const char *stringValue = luaL_tolstring(L, absIndex, NULL);
     char *result = g_strdup(stringValue ? stringValue : "");
     lua_pop(L, 1);
     return result;
@@ -1162,11 +1378,16 @@ static char *wslua_debugger_describe_value(lua_State *L, int idx)
 static bool wslua_debugger_value_can_expand(lua_State *L, int idx)
 {
     const int absIndex = wslua_debugger_abs_index(L, idx);
-    if (lua_type(L, absIndex) != LUA_TTABLE)
+    const int valueType = lua_type(L, absIndex);
+    if (valueType == LUA_TTABLE)
     {
-        return false;
+        return wslua_debugger_count_visible_table_entries(L, absIndex) > 0;
     }
-    return wslua_debugger_count_table_entries(L, absIndex) > 0;
+    if (valueType == LUA_TUSERDATA)
+    {
+        return wslua_debugger_count_userdata_getters(L, absIndex) > 0;
+    }
+    return false;
 }
 
 /**
@@ -1230,6 +1451,12 @@ wslua_variable_t *wslua_debugger_get_variables(const char *path,
                     lua_pop(target_L, 1);
                     continue;
                 }
+                /* The Variables view intentionally hides functions/methods. */
+                if (lua_type(target_L, -1) == LUA_TFUNCTION)
+                {
+                    lua_pop(target_L, 1);
+                    continue;
+                }
 
                 wslua_variable_t variable;
                 variable.name = g_strdup(name);
@@ -1256,6 +1483,14 @@ wslua_variable_t *wslua_debugger_get_variables(const char *path,
             const char *name;
             while ((name = lua_getupvalue(target_L, -1, upvalue_index)))
             {
+                /* The Variables view intentionally hides functions/methods. */
+                if (lua_type(target_L, -1) == LUA_TFUNCTION)
+                {
+                    lua_pop(target_L, 1);
+                    upvalue_index++;
+                    continue;
+                }
+
                 wslua_variable_t variable;
                 /* C closures use "" as the name for each slot; use a label so
                  * the UI path is valid for expansion. */
@@ -1306,6 +1541,13 @@ wslua_variable_t *wslua_debugger_get_variables(const char *path,
                 break;
             }
 
+            /* Hide functions/methods and wslua internal markers. */
+            if (wslua_debugger_entry_is_hidden(target_L))
+            {
+                lua_pop(target_L, 1);
+                continue;
+            }
+
             wslua_variable_t variable;
 
             if (lua_type(target_L, -2) == LUA_TSTRING)
@@ -1351,6 +1593,14 @@ wslua_variable_t *wslua_debugger_get_variables(const char *path,
                 while (lua_next(target_L, -2) != 0)
                 {
                     /* key at -2, value at -1 */
+
+                    /* Hide functions/methods and wslua internal markers. */
+                    if (wslua_debugger_entry_is_hidden(target_L))
+                    {
+                        lua_pop(target_L, 1);
+                        continue;
+                    }
+
                     wslua_variable_t variable;
 
                     /* Key */
@@ -1383,6 +1633,78 @@ wslua_variable_t *wslua_debugger_get_variables(const char *path,
 
                     g_array_append_val(variables_array, variable);
                     lua_pop(target_L, 1);
+                }
+            }
+            else if (lua_isuserdata(target_L, -1))
+            {
+                /* Expose wslua userdata via its attribute getters only.
+                 * Each getter is invoked with the userdata as its single
+                 * argument, just like the regular __index metamethod would
+                 * do when evaluating "userdata.attribute". */
+                const int userdata_abs = lua_gettop(target_L);
+                if (wslua_debugger_push_getters(target_L, userdata_abs))
+                {
+                    lua_pushnil(target_L);
+                    while (lua_next(target_L, -2) != 0)
+                    {
+                        /* __getters stores: [name] = cfunction. Anything
+                         * else (notably the __typeof marker) is ignored. */
+                        if (lua_type(target_L, -2) != LUA_TSTRING ||
+                            !lua_iscfunction(target_L, -1))
+                        {
+                            lua_pop(target_L, 1);
+                            continue;
+                        }
+
+                        const char *attr_name = lua_tostring(target_L, -2);
+                        if (g_strcmp0(attr_name, WSLUA_TYPEOF_FIELD) == 0)
+                        {
+                            lua_pop(target_L, 1);
+                            continue;
+                        }
+
+                        /* Protected call: getter(userdata). Errors are
+                         * surfaced as the value so traversal keeps working
+                         * even if a single attribute raises. */
+                        lua_pushvalue(target_L, -1);           /* getter */
+                        lua_pushvalue(target_L, userdata_abs); /* self */
+                        const int call_status =
+                            lua_pcall(target_L, 1, 1, 0);
+                        if (call_status != 0)
+                        {
+                            wslua_variable_t variable;
+                            variable.name = g_strdup(attr_name);
+                            variable.type = g_strdup("error");
+                            const char *err = lua_tostring(target_L, -1);
+                            variable.value =
+                                g_strdup(err ? err : "<getter error>");
+                            variable.can_expand = false;
+                            g_array_append_val(variables_array, variable);
+                            lua_pop(target_L, 2); /* error + getter */
+                            continue;
+                        }
+
+                        /* Skip attributes that resolve to a callable; the
+                         * Variables view never shows functions/methods. */
+                        if (lua_type(target_L, -1) == LUA_TFUNCTION)
+                        {
+                            lua_pop(target_L, 2); /* result + getter */
+                            continue;
+                        }
+
+                        wslua_variable_t variable;
+                        variable.name = g_strdup(attr_name);
+                        variable.type = g_strdup(lua_typename(
+                            target_L, lua_type(target_L, -1)));
+                        variable.value =
+                            wslua_debugger_describe_value(target_L, -1);
+                        variable.can_expand =
+                            wslua_debugger_value_can_expand(target_L, -1);
+
+                        g_array_append_val(variables_array, variable);
+                        lua_pop(target_L, 2); /* result + getter */
+                    }
+                    lua_pop(target_L, 1); /* __getters */
                 }
             }
             lua_pop(target_L, 1); /* Pop result */

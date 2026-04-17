@@ -146,6 +146,7 @@ struct _wslua_tw {
     funnel_text_window_t* ws_tw;
     bool expired;
     void* close_cb_data;
+    char* title;
 };
 
 typedef struct _wslua_field_t {

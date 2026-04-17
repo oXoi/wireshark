@@ -265,10 +265,11 @@ WSLUA_ATTRIBUTE_GET(PseudoHeader,type_name, {
 });
 
 /* __tostring returns a compact tag so the debugger/print show what kind
- * of pseudoheader this is without dumping the full variant struct. */
+ * of pseudoheader this is without dumping the full variant struct.
+ * Shape matches the shared convention: `Class: key=value` pairs. */
 static int PseudoHeader__tostring(lua_State *L) {
     PseudoHeader ph = checkPseudoHeader(L, 1);
-    lua_pushfstring(L, "PseudoHeader (%s)",
+    lua_pushfstring(L, "PseudoHeader: type=%s",
                     pseudoheader_type_name(ph ? ph->type : PHDR_NONE));
     return 1;
 }

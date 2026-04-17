@@ -6576,8 +6576,8 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
   unsigned int  i;
   char         *indent_string;
   int           retVal;
-  char          type_name[40];
-  size_t        bytesWritten;
+  wmem_strbuf_t *type_name_buf = NULL;
+  char         *type_name;
 
     /* Structure of the typecode data:
      *  Offset   | Size  | Field                        | Notes
@@ -6621,8 +6621,6 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
   if (ndds_40_hack) {
     ++tk_id;
   }
-
-  (void) g_strlcpy(type_name, rtps_util_typecode_id_to_string(tk_id), sizeof(type_name));
 
     /* Structure of the typecode data:
      *
@@ -6736,10 +6734,8 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
 
         if (seq_max_len != -1) {
           /* We're dissecting a sequence of struct, bypass the seq definition */
-          bytesWritten = g_strlcpy(type_name, struct_name, sizeof(type_name));
-          if (bytesWritten >= sizeof(type_name)) {
-            ws_utf8_truncate(type_name, sizeof(type_name) - 1);
-          }
+          type_name_buf = wmem_strbuf_new_len(pinfo->pool, struct_name, 40);
+          wmem_strbuf_utf8_make_valid(type_name_buf);
           break;
         }
 
@@ -6801,7 +6797,7 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
           decrement_dissection_depth(pinfo);
         }
         /* Finally prints the name of the struct (if provided) */
-        (void) g_strlcpy(type_name, "}", sizeof(type_name));
+        type_name_buf = wmem_strbuf_new(pinfo->pool, "}");
         break;
 
     } /* end of case UNION */
@@ -6898,10 +6894,8 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
 
         if (seq_max_len != -1) {
           /* We're dissecting a sequence of struct, bypass the seq definition */
-          bytesWritten = g_strlcpy(type_name, struct_name, sizeof(type_name));
-          if (bytesWritten >= sizeof(type_name)) {
-            ws_utf8_truncate(type_name, sizeof(type_name) - 1);
-          }
+          type_name_buf = wmem_strbuf_new_len(pinfo->pool, struct_name, 40);
+          wmem_strbuf_utf8_make_valid(type_name_buf);
           break;
         }
         /* Prints it */
@@ -6977,7 +6971,7 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
           }
         }
         /* Finally prints the name of the struct (if provided) */
-        (void) g_strlcpy(type_name, "}", sizeof(type_name));
+        type_name_buf = wmem_strbuf_new(pinfo->pool, "}");
         break;
       }
 
@@ -6994,12 +6988,8 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
         LONG_ALIGN(offset);
         string_length = tvb_get_uint32(tvb, offset, encoding);
         offset += 4;
-        bytesWritten = snprintf(type_name, sizeof(type_name), "%s<%d>",
-                       (tk_id == RTI_CDR_TK_STRING) ? "string" : "wstring",
-                       string_length);
-        if (bytesWritten >= sizeof(type_name)) {
-          ws_utf8_truncate(type_name, sizeof(type_name) - 1);
-        }
+        type_name_buf = wmem_strbuf_new(pinfo->pool, (tk_id == RTI_CDR_TK_STRING) ? "string" : "wstring");
+        wmem_strbuf_append_printf(type_name_buf, "<%u>", string_length);
         break;
     }
 
@@ -7074,10 +7064,8 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
         offset += 4;
         alias_name = (char*)tvb_get_string_enc(pinfo->pool, tvb, offset, alias_name_length, ENC_ASCII);
         offset = check_offset_addition(offset, alias_name_length, tree, NULL, tvb);
-        bytesWritten = g_strlcpy(type_name, alias_name, sizeof(type_name));
-        if (bytesWritten >= sizeof(type_name)) {
-          ws_utf8_truncate(type_name, sizeof(type_name) - 1);
-        }
+        type_name_buf = wmem_strbuf_new_len(pinfo->pool, alias_name, 40);
+        wmem_strbuf_utf8_make_valid(type_name_buf);
         break;
     }
 
@@ -7112,13 +7100,19 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
         if (tk_id == RTI_CDR_TK_VALUE_PARAM) {
           type_id_name = "valueparam";
         }
-        bytesWritten = snprintf(type_name, sizeof(type_name), "%s '%s'", type_id_name, value_name);
-        if (bytesWritten >= sizeof(type_name)) {
-          ws_utf8_truncate(type_name, sizeof(type_name) - 1);
-        }
+        type_name_buf = wmem_strbuf_new(pinfo->pool, type_id_name);
+        wmem_strbuf_append(type_name_buf, " '");
+        wmem_strbuf_append_len(type_name_buf, value_name, 30);
+        wmem_strbuf_utf8_make_valid(type_name_buf);
+        wmem_strbuf_append_c(type_name_buf, '\'');
         break;
     }
   } /* switch(tk_id) */
+
+  if (type_name_buf == NULL) {
+    type_name_buf = wmem_strbuf_new(pinfo->pool, rtps_util_typecode_id_to_string(tk_id));
+  }
+  type_name = wmem_strbuf_finalize(type_name_buf);
 
   /* Sequence print */
   if (seq_max_len != -1) {

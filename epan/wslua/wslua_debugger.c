@@ -1486,14 +1486,32 @@ static int64_t wslua_debugger_count_userdata_getters(lua_State *L, int idx)
     return count;
 }
 
+/*
+ * Cap preview strings at a modest length so one oversized leaf cannot
+ * freeze the Variables view. Tvb's __tostring dumps the full packet as
+ * hex; a 1500-byte frame becomes a ~4500 character preview. The raw
+ * value is still reachable via the Evaluate pane when a caller needs
+ * the complete text.
+ */
+#define WSLUA_DEBUGGER_PREVIEW_MAX_BYTES 256
+
 static char *wslua_debugger_describe_value(lua_State *L, int idx)
 {
     const int absIndex = wslua_debugger_abs_index(L, idx);
     const int valueType = lua_type(L, absIndex);
     if (valueType == LUA_TFUNCTION)
     {
-        /* Functions are filtered out of the Variables view; the empty
-         * string is kept for defensive callers that still reach here. */
+        /*
+         * Functions are filtered out of the Variables view; the empty
+         * string is kept for defensive callers that still reach here.
+         *
+         * Note: some userdata classes deliberately return "" from
+         * __tostring when no meaningful text is available (for example
+         * Column when pinfo->cinfo is NULL during details-pane
+         * dissection — see wslua_column.c). An empty preview therefore
+         * is not necessarily a bug in describe_value; check the class's
+         * __tostring before assuming the debugger is dropping data.
+         */
         return g_strdup("");
     }
     if (valueType == LUA_TTABLE)
@@ -1502,8 +1520,21 @@ static char *wslua_debugger_describe_value(lua_State *L, int idx)
             wslua_debugger_count_visible_table_entries(L, absIndex);
         return g_strdup_printf("table[%" PRId64 "]", entryCount);
     }
-    const char *stringValue = luaL_tolstring(L, absIndex, NULL);
-    char *result = g_strdup(stringValue ? stringValue : "");
+    size_t length = 0;
+    const char *stringValue = luaL_tolstring(L, absIndex, &length);
+    char *result;
+    if (stringValue && length > WSLUA_DEBUGGER_PREVIEW_MAX_BYTES)
+    {
+        /* Use an ASCII ellipsis ("...") to avoid UTF-8 truncation concerns
+         * when the raw preview is binary. */
+        result = g_strdup_printf("%.*s...",
+                                 WSLUA_DEBUGGER_PREVIEW_MAX_BYTES,
+                                 stringValue);
+    }
+    else
+    {
+        result = g_strdup(stringValue ? stringValue : "");
+    }
     lua_pop(L, 1);
     return result;
 }
@@ -1842,10 +1873,32 @@ wslua_variable_t *wslua_debugger_get_variables(const char *path,
                             continue;
                         }
 
+                        /* Skip attributes that evaluated to nil. A getter
+                         * returning nil typically signals "not applicable
+                         * for this object variant" (e.g. PseudoHeader
+                         * fields that only make sense for a subset of
+                         * encapsulations, or a Dumper that has been
+                         * closed). Hiding these keeps the view focused on
+                         * data that is actually present. */
+                        if (lua_type(target_L, -1) == LUA_TNIL)
+                        {
+                            lua_pop(target_L, 2); /* result + getter */
+                            continue;
+                        }
+
                         wslua_variable_t variable;
                         variable.name = g_strdup(attr_name);
-                        variable.type = g_strdup(lua_typename(
-                            target_L, lua_type(target_L, -1)));
+                        /*
+                         * Tag attribute-backed rows so the UI tooltip makes
+                         * the kind obvious: an "attribute" comes from a
+                         * wslua __getters entry (class-declared property),
+                         * while ordinary locals/upvalues/globals carry the
+                         * raw Lua typename.
+                         */
+                        variable.type = g_strdup_printf(
+                            "attribute (%s)",
+                            lua_typename(target_L,
+                                         lua_type(target_L, -1)));
                         variable.value =
                             wslua_debugger_describe_value(target_L, -1);
                         variable.can_expand =
@@ -1865,6 +1918,14 @@ wslua_variable_t *wslua_debugger_get_variables(const char *path,
                         /* Stack: ..., userdata, iterator, state, key,
                          *        value */
                         if (lua_type(target_L, -1) == LUA_TFUNCTION)
+                        {
+                            lua_pop(target_L, 1); /* value; keep key */
+                            continue;
+                        }
+                        /* Hide nil entries for the same reason as in the
+                         * attribute path: nil typically marks a slot that
+                         * is not meaningful for the current instance. */
+                        if (lua_type(target_L, -1) == LUA_TNIL)
                         {
                             lua_pop(target_L, 1); /* value; keep key */
                             continue;
@@ -1889,8 +1950,15 @@ wslua_variable_t *wslua_debugger_get_variables(const char *path,
                                 target_L, lua_type(target_L, -2)));
                         }
 
-                        variable.type = g_strdup(lua_typename(
-                            target_L, lua_type(target_L, -1)));
+                        /*
+                         * Tag __pairs-sourced rows as "pair" so the UI can
+                         * distinguish them from attribute-backed rows and
+                         * regular locals in the tooltip.
+                         */
+                        variable.type = g_strdup_printf(
+                            "pair (%s)",
+                            lua_typename(target_L,
+                                         lua_type(target_L, -1)));
                         variable.value =
                             wslua_debugger_describe_value(target_L, -1);
                         variable.can_expand =

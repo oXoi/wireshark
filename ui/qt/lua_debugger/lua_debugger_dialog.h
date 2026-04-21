@@ -21,7 +21,10 @@
 #include <QPushButton>
 #include <QString>
 #include <QStringList>
-#include <QTreeWidget>
+#include <QModelIndex>
+#include <QStandardItem>
+#include <QStandardItemModel>
+#include <QTreeView>
 #include <QVariantMap>
 #include <QVector>
 
@@ -92,7 +95,7 @@ class LuaDebuggerDialog : public GeometryStateDialog
     /**
      * @brief Apply inline edit for a root watch row (used by the item delegate).
      */
-    void commitWatchRootSpec(QTreeWidgetItem *item, const QString &text);
+    void commitWatchRootSpec(QStandardItem *item, const QString &text);
 
     /**
      * @brief Close from Esc or programmatic reject(); queues close() so
@@ -134,22 +137,22 @@ class LuaDebuggerDialog : public GeometryStateDialog
     /** @brief Remove every stored breakpoint. */
     void onClearBreakpoints();
     /** @brief Apply checkbox updates to a specific breakpoint row. */
-    void onBreakpointItemChanged(QTreeWidgetItem *item, int column);
+    void onBreakpointItemChanged(QStandardItem *item);
     /** @brief Handle single-clicks in the breakpoint list (e.g., delete icon).
      */
-    void onBreakpointItemClicked(QTreeWidgetItem *item, int column);
+    void onBreakpointItemClicked(const QModelIndex &index);
     /** @brief Open the clicked breakpoint's file and focus the line. */
-    void onBreakpointItemDoubleClicked(QTreeWidgetItem *item, int column);
+    void onBreakpointItemDoubleClicked(const QModelIndex &index);
     /** @brief Build and show the editor context menu. */
     void onCodeViewContextMenu(const QPoint &pos);
     /** @brief Populate child variable nodes when a tree item expands. */
-    void onVariableItemExpanded(QTreeWidgetItem *item);
+    void onVariableItemExpanded(const QModelIndex &index);
     /** @brief Update the Variables expansion map when a row collapses. */
-    void onVariableItemCollapsed(QTreeWidgetItem *item);
+    void onVariableItemCollapsed(const QModelIndex &index);
     /** @brief Populate watch child rows when a watch item expands. */
-    void onWatchItemExpanded(QTreeWidgetItem *item);
+    void onWatchItemExpanded(const QModelIndex &index);
     /** @brief Update the in-memory expansion map when a watch row collapses. */
-    void onWatchItemCollapsed(QTreeWidgetItem *item);
+    void onWatchItemCollapsed(const QModelIndex &index);
     /** @brief Context menu for the Watch tree. */
     void onWatchContextMenuRequested(const QPoint &pos);
     /** @brief Provide copy actions for a variable entry. */
@@ -163,10 +166,10 @@ class LuaDebuggerDialog : public GeometryStateDialog
     /** @brief Trigger a reload of all Lua plugins. */
     void onReloadLuaPlugins();
     /** @brief Jump to the selected stack frame location. */
-    void onStackItemDoubleClicked(QTreeWidgetItem *item, int column);
+    void onStackItemDoubleClicked(const QModelIndex &index);
     /** @brief Show Locals/Upvalues for the selected stack frame. */
-    void onStackCurrentItemChanged(QTreeWidgetItem *current,
-                                   QTreeWidgetItem *previous);
+    void onStackCurrentItemChanged(const QModelIndex &current,
+                                 const QModelIndex &previous);
     /** @brief Apply Wireshark text zoom to the script editor only. */
     void onMonospaceFontUpdated(const QFont &font);
     /** @brief Refresh fonts once the main application finishes initializing. */
@@ -186,11 +189,11 @@ class LuaDebuggerDialog : public GeometryStateDialog
     /** @brief Show inline go-to-line bar. */
     void onEditorGoToLine();
     /** @brief Sync Watch selection when Variables row selection changes. */
-    void onVariablesCurrentItemChanged(QTreeWidgetItem *current,
-                                       QTreeWidgetItem *previous);
+    void onVariablesCurrentItemChanged(const QModelIndex &current,
+                                       const QModelIndex &previous);
     /** @brief Sync Variables selection when a path-style watch root is selected. */
-    void onWatchCurrentItemChanged(QTreeWidgetItem *current,
-                                   QTreeWidgetItem *previous);
+    void onWatchCurrentItemChanged(const QModelIndex &current,
+                                   const QModelIndex &previous);
 
   private:
     Ui::LuaDebuggerDialog *ui;
@@ -241,12 +244,17 @@ class LuaDebuggerDialog : public GeometryStateDialog
     CollapsibleSection *evalSection;
     CollapsibleSection *settingsSection;
 
-    // Tree widgets (created programmatically)
-    QTreeWidget *variablesTree;
-    QTreeWidget *watchTree;
-    QTreeWidget *stackTree;
-    QTreeWidget *fileTree;
-    QTreeWidget *breakpointsTree;
+    // Tree views and item models (created programmatically)
+    QTreeView *variablesTree;
+    QStandardItemModel *variablesModel;
+    QTreeView *watchTree;
+    QStandardItemModel *watchModel;
+    QTreeView *stackTree;
+    QStandardItemModel *stackModel;
+    QTreeView *fileTree;
+    QStandardItemModel *fileModel;
+    QTreeView *breakpointsTree;
+    QStandardItemModel *breakpointsModel;
 
     // Eval panel widgets (created programmatically)
     QPlainTextEdit *evalInputEdit;
@@ -271,7 +279,7 @@ class LuaDebuggerDialog : public GeometryStateDialog
      * @param parent Optional parent tree item receiving the children.
      * @param path Resolved variable path used for debugger queries.
      */
-    void updateVariables(QTreeWidgetItem *parent = nullptr,
+    void updateVariables(QStandardItem *parent = nullptr,
                          const QString &path = QString());
     /** @brief Rebuild the breakpoint list widget from persisted data. */
     void updateBreakpoints();
@@ -345,10 +353,10 @@ class LuaDebuggerDialog : public GeometryStateDialog
      * @param path Fully qualified path from the role data.
      * @return Matching tree item pointer or nullptr.
      */
-    QTreeWidgetItem *findChildItemByPath(QTreeWidgetItem *parent,
-                                         const QString &path) const;
+    QStandardItem *findChildItemByPath(QStandardItem *parent,
+                                       const QString &path) const;
     /**
-     * @brief Break a path into display + absolute segments for the tree widget.
+     * @brief Break a path into display + absolute segments for the Files tree.
      * @param file_path Absolute path to split.
      * @param components Output vector receiving ordered components.
      * @return True when at least one path segment was produced.
@@ -436,38 +444,39 @@ class LuaDebuggerDialog : public GeometryStateDialog
     void insertNewWatchRow(const QString &initialSpec = QString(),
                            bool openEditor = true);
     /** @brief Apply one root or nested watch row from the debugger back-end. */
-    void applyWatchItemState(QTreeWidgetItem *item, bool liveContext,
+    void applyWatchItemState(QStandardItem *item, bool liveContext,
                              const QString &muted);
-    void applyWatchItemEmpty(QTreeWidgetItem *item, const QString &muted,
+    void applyWatchItemEmpty(QStandardItem *item, const QString &muted,
                              const QString &watchTipExtra);
-    void applyWatchItemNonPath(QTreeWidgetItem *item,
+    void applyWatchItemNonPath(QStandardItem *item,
                                const QString &watchTipExtra);
-    void applyWatchItemNoLiveContext(QTreeWidgetItem *item,
+    void applyWatchItemNoLiveContext(QStandardItem *item,
                                      const QString &muted,
                                      const QString &watchTipExtra);
-    void applyWatchItemError(QTreeWidgetItem *item, const QString &errStr,
+    void applyWatchItemError(QStandardItem *item, const QString &errStr,
                              const QString &watchTipExtra);
-    void applyWatchItemSuccess(QTreeWidgetItem *item, const QString &spec,
+    void applyWatchItemSuccess(QStandardItem *item, const QString &spec,
                                const char *val, const char *typ,
                                bool can_expand,
                                const QString &watchTipExtra);
     /** @brief Fill children for a path-based watch using get_variables. */
-    void fillWatchPathChildren(QTreeWidgetItem *parent,
+    void fillWatchPathChildren(QStandardItem *parent,
                                const QString &variablePath);
     /** @brief Re-query children after clearing (used on expand and on refresh). */
-    void refillWatchChildren(QTreeWidgetItem *item);
+    void refillWatchChildren(QStandardItem *item);
     /** @brief Refresh expanded watch rows depth-first (values after pause/step). */
-    void refreshWatchBranch(QTreeWidgetItem *item);
+    void refreshWatchBranch(QStandardItem *item);
     /** @brief Re-expand persisted subpaths after loading settings or refresh. */
     void restoreWatchExpansionState();
     /** @brief Re-expand Variables sections from the runtime expansion map. */
     void restoreVariablesExpansionState();
 
     /** @brief Delete the given top-level watch rows from the tree. */
-    void deleteWatchRows(const QList<QTreeWidgetItem *> &items);
-    QTreeWidgetItem *findVariablesItemByPath(const QString &path) const;
-    QTreeWidgetItem *findWatchRootForVariablePath(const QString &path) const;
-    static void expandAncestorsOf(QTreeWidget *tree, QTreeWidgetItem *item);
+    void deleteWatchRows(const QList<QStandardItem *> &items);
+    QStandardItem *findVariablesItemByPath(const QString &path) const;
+    QStandardItem *findWatchRootForVariablePath(const QString &path) const;
+    static void expandAncestorsOf(QTreeView *tree, QStandardItemModel *model,
+                                  QStandardItem *item);
     /** @brief Select the Variables row matching the current watch (if any). */
     void syncVariablesTreeToCurrentWatch();
     /** @brief Shared wording when the user enters a non-path watch spec. */
@@ -480,8 +489,8 @@ class LuaDebuggerDialog : public GeometryStateDialog
      * Variables Locals/Globals/Upvalues section).
      *
      * Tracks which roots are expanded and which descendant path keys are
-     * expanded. Updated on every QTreeWidget::itemExpanded / itemCollapsed
-     * signal so the state survives child-item destruction during pause →
+     * expanded. Updated on every QTreeView::expanded / collapsed signal so
+     * the state survives child-item destruction during pause →
      * resume → pause cycles, lazy refills, and tree refreshes.
      *
      * **Not** persisted to `lua_debugger.json`.

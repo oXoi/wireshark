@@ -15289,7 +15289,8 @@ static void dissect_ACKNACK(tvbuff_t *tvb, packet_info *pinfo, int offset, uint8
 /* *                          N A C K _ F R A G                          * */
 /* *********************************************************************** */
 static void dissect_NACK_FRAG(tvbuff_t *tvb, packet_info *pinfo, int offset, uint8_t flags,
-                              const unsigned encoding, int octets_to_next_header, proto_tree *tree) {
+                              const unsigned encoding, int octets_to_next_header, proto_tree *tree,
+                              endpoint_guid *guid) {
   /*
    * 0...2...........7...............15.............23...............31
    * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -15311,6 +15312,7 @@ static void dissect_NACK_FRAG(tvbuff_t *tvb, packet_info *pinfo, int offset, uin
    * +---------------+---------------+---------------+---------------+
    */
   proto_item *octet_item;
+  uint32_t wid;
 
   proto_tree_add_bitmask_value(tree, tvb, offset + 1, hf_rtps_sm_flags, ett_rtps_flags, NACK_FRAG_FLAGS, flags);
 
@@ -15331,8 +15333,11 @@ static void dissect_NACK_FRAG(tvbuff_t *tvb, packet_info *pinfo, int offset, uin
 
   /* writerEntityId */
   rtps_util_add_entity_id(tree, pinfo, tvb, offset, hf_rtps_sm_wrentity_id, hf_rtps_sm_wrentity_id_key,
-                        hf_rtps_sm_wrentity_id_kind, ett_rtps_wrentity, "writerEntityId", NULL);
+                        hf_rtps_sm_wrentity_id_kind, ett_rtps_wrentity, "writerEntityId", &wid);
   offset += 4;
+  guid->entity_id = wid;
+  guid->fields_present |= GUID_HAS_ENTITY_ID;
+  rtps_util_add_topic_info(tree, pinfo, tvb, offset, guid);
 
   /* Writer sequence number */
   rtps_util_add_seq_number(tree, tvb, offset, encoding, "writerSN",
@@ -17977,7 +17982,7 @@ static bool dissect_rtps_submessage_v2(
       break;
 
     case SUBMESSAGE_NACK_FRAG:
-      dissect_NACK_FRAG(tvb, pinfo, offset, flags, encoding, octets_to_next_header, rtps_submessage_tree);
+      dissect_NACK_FRAG(tvb, pinfo, offset, flags, encoding, octets_to_next_header, rtps_submessage_tree, guid);
       break;
 
     case SUBMESSAGE_ACKNACK_SESSION:

@@ -271,10 +271,6 @@ workflow:
     - ninja
     - ninja test-programs
     - pytest --enable-stratoshark --disable-capture --junitxml=../macos_tests.xml
-  after_script:
-    # The cache should be large enough to be useful but it shouldn't take
-    # too long to restore+save each run.
-    - ccache --max-size $( gdu --summarize --block-size=1M "$CI_PROJECT_DIR/build" | awk '{printf ("%dM", $1 * 1.5)}' )
   needs: []
 
 .build-mingw:
@@ -688,13 +684,13 @@ macOS Universal Package:
   before_script:
     - brew --version
     - printf "\e[0Ksection_start:%s:brew_section[collapsed=true]\r\e[0KInstalling prerequisites" "$( date +%s)"
-    - brew install ccache cmake ninja python
+    - brew install awscli ccache cmake ninja python
     # - ./tools/macos-setup-brew.sh --install-optional --install-test-deps
     - printf "\e[0Ksection_end:%s:brew_section\r\e[0K" "$( date +%s)"
     - export PATH="/opt/homebrew/bin:$PATH:$HOME/bin"
     - python3 -m venv --clear $CI_PROJECT_DIR/.venv
     - source $CI_PROJECT_DIR/.venv/bin/activate
-    - pip3 install dmgbuild pyobjc-framework-Quartz pytest pytest-xdist
+    - pip3 install  dmgbuild pyobjc-framework-Quartz pytest pytest-xdist
   script:
     - if [[ $MACOS_REINSTALL_THIRD_PARTY == true ]] ; then rm -rf "$WIRESHARK_BASE_DIR" ; fi
     - if [ ! -d "$WIRESHARK_BASE_DIR/Qt" ] ; then mkdir -p "$WIRESHARK_BASE_DIR/Qt" ; fi
@@ -1091,6 +1087,10 @@ macOS Build:
     when:
       - runner_system_failure
       - stuck_or_timeout_failure
+  after_script:
+    # The cache should be large enough to be useful but it shouldn't take
+    # too long to restore+save each run.
+    - ccache --max-size $( gdu --summarize --block-size=1M "$CI_PROJECT_DIR/build" | awk '{printf ("%dM", $1 * 1.5)}' )
   artifacts:
     when: always
     reports:

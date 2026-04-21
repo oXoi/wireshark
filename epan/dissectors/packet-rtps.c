@@ -10718,17 +10718,21 @@ static bool dissect_parameter_sequence_rti_dds(proto_tree *rtps_parameter_tree, 
 
   switch(parameter) {
 
-  case PID_SAMPLE_SIGNATURE:
+  case PID_SAMPLE_SIGNATURE: {
+      uint32_t signature_length;
       ENSURE_LENGTH(16);
       proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_sample_signature_epoch, tvb,
                   offset, 8, encoding);
       proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_sample_signature_nonce, tvb,
                   offset+8, 4, encoding);
-      proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_sample_signature_length, tvb,
-                  offset+12, 4, encoding);
-      proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_sample_signature_signature, tvb,
-                  offset+16, param_length-16, ENC_NA);
+      proto_tree_add_item_ret_uint(rtps_parameter_tree, hf_rtps_param_sample_signature_length, tvb,
+                  offset+12, 4, encoding, &signature_length);
+      if (signature_length > 0) {
+          proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_sample_signature_signature, tvb,
+                      offset+16, signature_length, ENC_NA);
+      }
       break;
+  }
 
     /* PID_CHECKSUM_PROPERTY: currently sent by RTI Connext Micro (vendor
      * 01.10) in SPDP DATA(p) to advertise checksum negotiation properties.

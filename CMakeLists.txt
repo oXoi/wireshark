@@ -2927,7 +2927,6 @@ set_target_properties(copy_data_files PROPERTIES FOLDER "Copy Tasks")
 add_library(shark_common OBJECT
 	extcap_parser.c
 	file_packet_provider.c
-	sync_pipe_write.c
 )
 add_library(cli_main OBJECT cli_main.c)
 
@@ -3813,8 +3812,8 @@ if(BUILD_dumpcap AND PCAP_FOUND)
 		cli_main.c
 		dumpcap.c
 		ringbuffer.c
-		sync_pipe_write.c
 		capture/iface_monitor.c
+		capture/sync_pipe_write.c
 		capture/ws80211_utils.c
 		ui/capture_opts.c
 		${CAPUTILS_SRC}

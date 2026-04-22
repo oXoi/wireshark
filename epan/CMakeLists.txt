@@ -41,6 +41,7 @@ set(LIBWIRESHARK_PUBLIC_HEADERS
 	arptypes.h
 	asn1.h
 	capture_dissectors.h
+	cfile.h
 	charsets.h
 	color_filters.h
 	column.h

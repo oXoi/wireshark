@@ -17,7 +17,11 @@
 #include <epan/dfilter/dfilter.h>
 #include <epan/frame_data.h>
 #include <epan/frame_data_sequence.h>
+
 #include <wiretap/wtap.h>
+
+#include <wsutil/file_compressed.h>
+#include <wsutil/buffer.h>
 
 #ifdef __cplusplus
 extern "C" {

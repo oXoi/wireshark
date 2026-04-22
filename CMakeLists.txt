@@ -4517,7 +4517,6 @@ if(ASCIIDOCTOR_FOUND AND XSLTPROC_EXECUTABLE)
 endif()
 
 set(SHARK_PUBLIC_HEADERS
-	cfile.h
 	cli_main.h
 	${CMAKE_BINARY_DIR}/ws_version.h
 )

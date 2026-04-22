@@ -2722,7 +2722,7 @@ basic_response_dissector(packet_info *pinfo, tvbuff_t *tvb, proto_tree *tree,
 	unsigned i;
 	unsigned expert_len;
 	char response_code_chars[4];
-	gboolean invalid_status_code_token = FALSE;
+	bool invalid_status_code_token = false;
 	int status_code_offset;
 	proto_item *ti;
 	proto_item *r_ti;
@@ -2749,11 +2749,11 @@ basic_response_dissector(packet_info *pinfo, tvbuff_t *tvb, proto_tree *tree,
 
 	/* Validate status code token */
 	if (tokenlen != 3) {
-		invalid_status_code_token = TRUE;
+		invalid_status_code_token = true;
 	} else {
 		for (i = 0; i < tokenlen; i++) {
 			if (!g_ascii_isdigit(status_code_token[i])) {
-				invalid_status_code_token = TRUE;
+				invalid_status_code_token = true;
 				break;
 			}
 		}
@@ -2785,8 +2785,8 @@ basic_response_dissector(packet_info *pinfo, tvbuff_t *tvb, proto_tree *tree,
 
 	if (invalid_status_code_token) {
 		expert_add_info_format(pinfo, ti, &ei_http_response_code_invalid,
-			"Invalid HTTP response status code token: \"%.*s\" (expected exactly 3 digits)",
-			tokenlen, status_code_token);
+			"Invalid HTTP response status code token: \"%s\" (expected exactly 3 digits)",
+			format_text(pinfo->pool, (const char *)status_code_token, tokenlen));
 	}
 	if (tokenlen < 3)
 		return;

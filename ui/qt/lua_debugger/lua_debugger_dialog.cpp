@@ -64,6 +64,7 @@
 #include <QStyle>
 #include <QTextDocument>
 #include <QSplitter>
+#include <QPersistentModelIndex>
 #include <QTimer>
 #include <QStyledItemDelegate>
 #include <QStyleOptionViewItem>
@@ -172,20 +173,39 @@ constexpr qint32 VariableTypeRole = static_cast<qint32>(Qt::UserRole + 9);
 constexpr qint32 VariableCanExpandRole = static_cast<qint32>(Qt::UserRole + 10);
 constexpr qint32 WatchSpecRole = static_cast<qint32>(Qt::UserRole + 11);
 constexpr qint32 WatchSubpathRole = static_cast<qint32>(Qt::UserRole + 13);
-constexpr qint32 WatchLastValueRole = static_cast<qint32>(Qt::UserRole + 14);
 constexpr qint32 WatchPendingNewRole = static_cast<qint32>(Qt::UserRole + 15);
 /*
  * Expansion state for watch roots and Variables sections is tracked in
  * LuaDebuggerDialog::watchExpansion_ and variablesExpansion_ (runtime-only
  * QHashes). The dialog members are the single source of truth and survive
  * child-item destruction during pause / resume / step.
+ *
+ * "Value changed since last pause" baselines live on the dialog too
+ * (LuaDebuggerDialog::watchRootBaseline_ / watchChildBaseline_ /
+ * variablesBaseline_ and their *Current_ mirrors); see the header.
  */
-/** Per-root map path/subpath key → last raw value string (child bold-on-change). */
-constexpr qint32 WatchChildSnapRole =
+/** Monotonic flash generation id stored on a value cell so a pending
+ *  clear-timer only clears its own flash, not a fresher one. */
+constexpr qint32 ChangedFlashSerialRole =
     static_cast<qint32>(Qt::UserRole + 20);
 
 constexpr qsizetype WATCH_TOOLTIP_MAX_CHARS = 4096;
 constexpr int WATCH_EXPR_MAX_CHARS = 65536;
+/** Transient background-flash duration for a value that just changed. */
+constexpr int CHANGED_FLASH_MS = 500;
+/**
+ * Delay before applying the "Watch column shows —" placeholder after a step
+ * resume. A typical Lua single-step re-pauses well within a few ms; running
+ * the placeholder repaint immediately would visibly flicker every Watch row
+ * value→—→value across the resume / re-pause boundary, even when the value
+ * did not change. handlePause() bumps watchPlaceholderEpoch_, so any timer
+ * scheduled with a stale epoch is dropped without touching the Watch tree.
+ * Long-running steps (or scripts that simply terminate) still see the
+ * placeholder appear after this delay.
+ */
+constexpr int WATCH_PLACEHOLDER_DEFER_MS = 250;
+/** Separator used in composite (stackLevel, path) baseline-map keys. */
+constexpr QChar CHANGE_KEY_SEP = QChar(0x1F); // ASCII Unit Separator
 
 /** @brief Registers the UI callback with the Lua debugger core at load time. */
 class LuaDebuggerUiCallbackRegistrar
@@ -285,6 +305,72 @@ static QStandardItem *watchRootItem(QStandardItem *item)
     }
     return item;
 }
+
+/**
+ * True when a watch spec resolves against `_G` (i.e. not frame-dependent).
+ * Used by changeKey() to avoid invalidating a Globals watch when the user
+ * switches the call-stack frame.
+ */
+static bool watchSpecIsGlobalScoped(const QString &spec)
+{
+    const QString t = spec.trimmed();
+    return t.startsWith(QLatin1String("Globals")) ||
+           t == QLatin1String("_G") ||
+           t.startsWith(QLatin1String("_G."));
+}
+
+/**
+ * True when a Variables tree path is under `Globals` (frame-independent).
+ */
+static bool variablesPathIsGlobalScoped(const QString &path)
+{
+    return path == QLatin1String("Globals") ||
+           path.startsWith(QLatin1String("Globals."));
+}
+
+/** Compose a baseline-map key from (stackLevel, path). */
+static QString changeKey(int stackLevel, const QString &path)
+{
+    return QString::number(stackLevel) + CHANGE_KEY_SEP + path;
+}
+
+/** Parse the "spec" portion out of a composite key produced by changeKey(). */
+static QString watchSpecFromChangeKey(const QString &key)
+{
+    const qsizetype sep = key.indexOf(CHANGE_KEY_SEP);
+    return sep < 0 ? key : key.mid(sep + 1);
+}
+
+/**
+ * Lookup / compare in one place. Returns true when @a key was recorded in
+ * @a baseline with a different value, or (when @a flashNew is set) when @a
+ * key was absent from @a baseline but @a baseline itself is non-empty —
+ * i.e. we have *some* prior snapshot to compare against, so the absence of
+ * this key means the variable appeared since the last pause.
+ *
+ * An empty-string baseline is still a valid recorded value and can signal a
+ * change.
+ *
+ * The @a flashNew heuristic is used for runtime-discovered rows
+ * (Variables tree, Watch children inside an expanded table) but is
+ * deliberately false for Watch *roots* since a root with no baseline is
+ * almost always one the user just added and should not flash on its first
+ * evaluation.
+ *
+ * Factored out so the unit tests can exercise it without a live dialog.
+ */
+template <class Key, class Map>
+static bool shouldMarkChanged(const Map &baseline, const Key &key,
+                              const QString &newVal, bool flashNew = false)
+{
+    const auto it = baseline.constFind(key);
+    if (it != baseline.constEnd())
+    {
+        return *it != newVal;
+    }
+    return flashNew && !baseline.isEmpty();
+}
+
 
 /** Top-level Variables section key (`Locals` / `Globals` / `Upvalues`). */
 static QString variableSectionRootKeyFromItem(const QStandardItem *item)
@@ -548,25 +634,23 @@ static QString watchPathParentKey(const QString &path)
     return QString();
 }
 
-static void applyWatchChildRowPresentation(QStandardItem *col0,
-                                           const QString &stableKey,
-                                           const QString &rawVal,
-                                           const QString &typeText)
+/**
+ * Populate the text and tooltip cells for one Watch-tree child row.
+ * "Value changed since last pause" visuals (accent + bold + optional flash)
+ * are applied by the dialog via `applyChangedVisuals` once this function
+ * has installed the display text; see `fillWatchPathChildren`.
+ */
+static void applyWatchChildRowTextAndTooltip(QStandardItem *col0,
+                                             const QString &rawVal,
+                                             const QString &typeText)
 {
     auto *wm = qobject_cast<QStandardItemModel *>(col0->model());
     if (!wm)
     {
         return;
     }
-    QStandardItem *root = watchRootItem(col0);
-    if (!root)
-    {
-        return;
-    }
-    QVariantMap snaps = root->data(WatchChildSnapRole).toMap();
-    const QString prev = snaps.value(stableKey).toString();
     setText(wm, col0, 1, rawVal);
-    QString tooltipSuffix =
+    const QString tooltipSuffix =
         typeText.isEmpty()
             ? QString()
             : LuaDebuggerDialog::tr("Type: %1").arg(typeText);
@@ -582,12 +666,6 @@ static void applyWatchChildRowPresentation(QStandardItem *col0,
             tooltipSuffix.isEmpty()
                 ? rawVal
                 : QStringLiteral("%1\n%2").arg(rawVal, tooltipSuffix)));
-    QStandardItem *vcell = cellAt(wm, col0, 1);
-    QFont f1 = vcell ? vcell->font() : QFont();
-    f1.setBold(!prev.isEmpty() && prev != rawVal);
-    setFont(wm, col0, 1, f1);
-    snaps[stableKey] = rawVal;
-    root->setData(snaps, WatchChildSnapRole);
 }
 
 static int watchSubpathBoundaryCount(const QString &subpath)
@@ -766,7 +844,8 @@ static void setupWatchRootItemFromSpec(QStandardItem *col0, QStandardItem *col1,
 {
     col0->setFlags(col0->flags() | Qt::ItemIsEditable | Qt::ItemIsEnabled |
                    Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
-    col1->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+    /* Value column: drag the whole watch row, not a single cell, when reordering. */
+    col1->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
     col0->setText(spec);
     col1->setText(QString());
     col0->setData(spec, WatchSpecRole);
@@ -781,23 +860,76 @@ static void setupWatchRootItemFromSpec(QStandardItem *col0, QStandardItem *col1,
 }
 
 /**
+ * Watch list: @c QStandardItemModel::dropMimeData() uses the drop @a column when
+ * resolving the target index, so a drop on the Value column (column 1) can
+ * re-parent a row or move a single "cell" instead of reordering the
+ * two-column watch entry. For top-level drops, use column 0. For any index
+ * on a top-level watch row, use the Watch-spec column (0) as the parent/anchor.
+ */
+class WatchItemModel : public QStandardItemModel
+{
+  public:
+    using QStandardItemModel::QStandardItemModel;
+
+  protected:
+    bool dropMimeData(const QMimeData *data, Qt::DropAction action, int row,
+                      int column, const QModelIndex &parent) override
+    {
+        int c = column;
+        QModelIndex p = parent;
+        if (!p.isValid())
+        {
+            c = 0;
+        }
+        else if (!p.parent().isValid() && p.column() != 0)
+        {
+            p = p.sibling(p.row(), 0);
+        }
+        return QStandardItemModel::dropMimeData(data, action, row, c, p);
+    }
+};
+
+/**
  * @brief Watch tree that only allows top-level reordering via drag-and-drop.
+ *
+ * The view uses @c QAbstractItemView::SelectRows so the drop line spans both
+ * columns (Qt 6+). The Value column is drag-enabled for watch roots. Nested
+ * watch rows are not valid drop targets. A drop on a top-level row’s center
+ * (@c OnItem) is applied like @c AboveItem: insert that row at the same index
+ * the view would use for a drop just above, instead of re-parenting as a
+ * child of the target row.
  *
  * The dialog's settings map (`settings_`) is refreshed from the tree only at
  * close time via `storeDialogSettings()` / `saveSettingsFile()`, so a drop
- * event has no persistence work to do beyond letting QTreeView finish the
- * internal move.
+ * event has no persistence work to do beyond the model’s internal move. After
+ * a successful move, panel monospace fonts are re-applied on the watch tree
+ * and related panels.
+ *
+ * Only top-level (watch spec) rows may be dragged: starting a drag is blocked
+ * when the selection includes any expanded variable (child) index.
  */
 class WatchTreeWidget : public QTreeView
 {
   public:
     explicit WatchTreeWidget(LuaDebuggerDialog *dlg, QWidget *parent = nullptr)
-        : QTreeView(parent)
+        : QTreeView(parent), dialog_(dlg)
     {
-        Q_UNUSED(dlg);
     }
 
   protected:
+    void startDrag(Qt::DropActions supportedActions) override
+    {
+        const QModelIndexList list = selectedIndexes();
+        for (const QModelIndex &ix : list)
+        {
+            if (ix.isValid() && ix.parent().isValid())
+            {
+                return;
+            }
+        }
+        QTreeView::startDrag(supportedActions);
+    }
+
     void dragMoveEvent(QDragMoveEvent *event) override
     {
         QTreeView::dragMoveEvent(event);
@@ -813,40 +945,75 @@ class WatchTreeWidget : public QTreeView
         const QModelIndex idx = indexAt(pos);
         if (idx.isValid() && idx.parent().isValid())
         {
+            /* Nested (expanded variable) rows: do not make them drop targets. */
             event->ignore();
-            return;
-        }
-        /* OnItem on a top-level row nests the dragged row as a child — only allow
-         * AboveItem / BelowItem reorder between roots. */
-        if (idx.isValid() && !idx.parent().isValid() &&
-            dropIndicatorPosition() == QAbstractItemView::OnItem)
-        {
-            event->ignore();
-            return;
         }
     }
 
     void dropEvent(QDropEvent *event) override
     {
+        if (dragDropMode() == QAbstractItemView::InternalMove &&
+            (event->source() != this || !(event->possibleActions() & Qt::MoveAction)))
+        {
+            return;
+        }
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
         const QPoint pos = event->position().toPoint();
 #else
         const QPoint pos = event->pos();
 #endif
-        const QModelIndex idx = indexAt(pos);
-        if (idx.isValid() && idx.parent().isValid())
+        const QModelIndex raw = indexAt(pos);
+        if (raw.isValid() && raw.parent().isValid())
         {
             event->ignore();
             return;
         }
-        if (idx.isValid() && !idx.parent().isValid() &&
+        /* OnItem on a top-level index would insert as a child; treat like Above. */
+        if (raw.isValid() && !raw.parent().isValid() &&
             dropIndicatorPosition() == QAbstractItemView::OnItem)
         {
-            event->ignore();
+            if (auto *m = qobject_cast<QStandardItemModel *>(model()))
+            {
+                const int destRow = raw.row();
+                if (m->dropMimeData(event->mimeData(), Qt::MoveAction, destRow,
+                                    0, QModelIndex()))
+                {
+                    event->setDropAction(Qt::MoveAction);
+                    event->accept();
+                }
+                else
+                {
+                    event->ignore();
+                }
+            }
+            else
+            {
+                event->ignore();
+            }
+            stopAutoScroll();
+            setState(QAbstractItemView::NoState);
+            if (viewport())
+            {
+                viewport()->update();
+            }
+            if (event->isAccepted() && dialog_)
+            {
+                LuaDebuggerDialog *const d = dialog_;
+                QTimer::singleShot(0, d, [d]()
+                                   { d->reapplyMonospacePanelFonts(); });
+            }
             return;
         }
         QTreeView::dropEvent(event);
+        if (event->isAccepted() && dialog_)
+        {
+            LuaDebuggerDialog *const d = dialog_;
+            QTimer::singleShot(0, d, [d]() { d->reapplyMonospacePanelFonts(); });
+        }
     }
+
+  private:
+    LuaDebuggerDialog *dialog_ = nullptr;
 };
 
 /** Variables tree: block inline editors on all columns (read-only display). */
@@ -1034,7 +1201,6 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     ui->actionStepIn->setIcon(StockIcon("x-lua-debug-step-in"));
     ui->actionStepOut->setIcon(StockIcon("x-lua-debug-step-out"));
     ui->actionReloadLuaPlugins->setIcon(StockIcon("view-refresh"));
-    ui->actionClearBreakpoints->setIcon(StockIcon("edit-clear"));
     {
         QIcon addWatchIcon = QIcon::fromTheme(QStringLiteral("system-search"));
         if (addWatchIcon.isNull())
@@ -1059,7 +1225,6 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     ui->actionStepOut->setToolTip(tr("Step out (Shift+F11)"));
     ui->actionReloadLuaPlugins->setToolTip(
         tr("Reload Lua Plugins (Ctrl+Shift+L)"));
-    ui->actionClearBreakpoints->setToolTip(tr("Remove all breakpoints"));
     ui->actionAddWatch->setToolTip(tr("%1 (%2)")
                                        .arg(ui->actionAddWatch->toolTip(),
                                             ui->actionAddWatch->shortcut()
@@ -1090,7 +1255,7 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
 
     // Toolbar controls - Checkbox for enable/disable
     // Order: Checkbox | Separator | Continue | Step Over/In/Out | Separator |
-    // Open | Reload | Clear
+    // Open | Reload
     QAction *firstAction = ui->toolBar->actions().isEmpty()
                                ? nullptr
                                : ui->toolBar->actions().first();
@@ -1110,8 +1275,6 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
             &LuaDebuggerDialog::onStepIn);
     connect(ui->actionStepOut, &QAction::triggered, this,
             &LuaDebuggerDialog::onStepOut);
-    connect(ui->actionClearBreakpoints, &QAction::triggered, this,
-            &LuaDebuggerDialog::onClearBreakpoints);
     connect(ui->actionAddWatch, &QAction::triggered, this, [this]()
             { insertNewWatchRow(QString(), true); });
     connect(ui->actionOpenFile, &QAction::triggered, this,
@@ -1150,17 +1313,16 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     // Breakpoints
     connect(breakpointsModel, &QStandardItemModel::itemChanged, this,
             &LuaDebuggerDialog::onBreakpointItemChanged);
-    connect(breakpointsTree, &QTreeView::clicked, this,
-            &LuaDebuggerDialog::onBreakpointItemClicked);
     connect(breakpointsTree, &QTreeView::doubleClicked, this,
             &LuaDebuggerDialog::onBreakpointItemDoubleClicked);
+    connect(breakpointsTree, &QTreeView::customContextMenuRequested, this,
+            &LuaDebuggerDialog::onBreakpointContextMenuRequested);
 
     QHeaderView *breakpointHeader = breakpointsTree->header();
     breakpointHeader->setStretchLastSection(false);
     breakpointHeader->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     breakpointHeader->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     breakpointHeader->setSectionResizeMode(2, QHeaderView::Stretch);
-    breakpointHeader->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     breakpointsModel->setHeaderData(2, Qt::Horizontal, tr("Location"));
     breakpointsTree->setColumnHidden(1, true);
 
@@ -1233,6 +1395,10 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     configureWatchTreeColumns();
     configureStackTreeColumns();
     applyMonospaceFonts();
+    /* Seed the accent + flash brushes from the initial palette so the very
+     * first pause shows correctly themed cues without having to wait for a
+     * preference / color-scheme change. */
+    refreshChangedValueBrushes();
 
     /*
      * Register our reload callback with the debugger core.
@@ -1330,7 +1496,10 @@ void LuaDebuggerDialog::createCollapsibleSections()
            "Outer variables that this function actually uses from surrounding code. "
            "Anything the function does not reference does not appear here.</p>"
            "<p><b>Globals</b><br/>"
-           "Names from the global environment table.</p>"));
+           "Names from the global environment table.</p>"
+           "<p>Values that differ from the previous pause are drawn in a "
+           "<b>bold accent color</b>, and briefly flash on the pause that "
+           "introduced the change.</p>"));
     variablesModel = new QStandardItemModel(this);
     variablesModel->setColumnCount(3);
     variablesModel->setHorizontalHeaderLabels({tr("Name"), tr("Value"), tr("Type")});
@@ -1376,18 +1545,22 @@ void LuaDebuggerDialog::createCollapsibleSections()
            "arbitrary Lua expressions.</p>"
            "<p>Values are only read while the debugger is "
            "<b>paused</b>; otherwise the Value column shows a muted "
-           "em dash. Child values that changed since the previous pause "
-           "are shown in <b>bold</b>.</p>"
+           "em dash. Values that differ from the previous pause are "
+           "drawn in a <b>bold accent color</b>, and briefly flash on "
+           "the pause that introduced the change.</p>"
            "<p>Double-click or press <b>F2</b> to edit a row; "
            "<b>Delete</b> removes it; drag rows to reorder.</p>"));
     watchTree = new WatchTreeWidget(this);
-    watchModel = new QStandardItemModel(this);
+    watchModel = new WatchItemModel(this);
     watchModel->setColumnCount(2);
     watchModel->setHorizontalHeaderLabels({tr("Watch"), tr("Value")});
     watchTree->setModel(watchModel);
     watchTree->setRootIsDecorated(true);
     watchTree->setDragDropMode(QAbstractItemView::InternalMove);
     watchTree->setDefaultDropAction(Qt::MoveAction);
+    /* Row selection + full-row focus: horizontal drop line spans all columns. */
+    watchTree->setSelectionBehavior(QAbstractItemView::SelectRows);
+    watchTree->setAllColumnsShowFocus(true);
     watchTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
     watchTree->setUniformRowHeights(true);
     watchTree->setWordWrap(false);
@@ -1409,6 +1582,7 @@ void LuaDebuggerDialog::createCollapsibleSections()
     stackModel->setHorizontalHeaderLabels({tr("Function"), tr("Location")});
     stackTree = new QTreeView();
     stackTree->setModel(stackModel);
+    stackTree->setEditTriggers(QAbstractItemView::NoEditTriggers);
     stackTree->setRootIsDecorated(true);
     stackTree->setToolTip(
         tr("Select a row to inspect locals and upvalues for that frame. "
@@ -1420,12 +1594,17 @@ void LuaDebuggerDialog::createCollapsibleSections()
     // --- Breakpoints Section ---
     breakpointsSection = new CollapsibleSection(tr("Breakpoints"), this);
     breakpointsModel = new QStandardItemModel(this);
-    breakpointsModel->setColumnCount(4);
+    breakpointsModel->setColumnCount(3);
     breakpointsModel->setHorizontalHeaderLabels(
-        {tr("Active"), tr("Line"), tr("File"), QString()});
+        {tr("Active"), tr("Line"), tr("File")});
     breakpointsTree = new QTreeView();
     breakpointsTree->setModel(breakpointsModel);
+    breakpointsTree->setEditTriggers(QAbstractItemView::NoEditTriggers);
     breakpointsTree->setRootIsDecorated(false);
+    breakpointsTree->setSelectionBehavior(QAbstractItemView::SelectRows);
+    breakpointsTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    breakpointsTree->setAllColumnsShowFocus(true);
+    breakpointsTree->setContextMenuPolicy(Qt::CustomContextMenu);
     breakpointsSection->setContentWidget(breakpointsTree);
     breakpointsSection->setExpanded(true);
     splitter->addWidget(breakpointsSection);
@@ -1437,6 +1616,7 @@ void LuaDebuggerDialog::createCollapsibleSections()
     fileModel->setHorizontalHeaderLabels({tr("Files")});
     fileTree = new QTreeView();
     fileTree->setModel(fileModel);
+    fileTree->setEditTriggers(QAbstractItemView::NoEditTriggers);
     fileTree->setRootIsDecorated(false);
     filesSection->setContentWidget(fileTree);
     filesSection->setExpanded(true);
@@ -1559,9 +1739,45 @@ void LuaDebuggerDialog::handlePause(const char *file_path, int64_t line)
     }
 
     debuggerPaused = true;
+
+    /* Cancel any deferred "Watch column shows —" placeholder still pending
+     * from the previous resume (typical for runDebuggerStep): we are
+     * about to repaint the Watch tree with real values, so the user must
+     * never see it briefly flip to "—" and back to the same value. */
+    ++watchPlaceholderEpoch_;
+
+    /* One snapshot per pause entry: rotate last pause's "current" values
+     * into the baseline so every refresh below compares against them.
+     * This MUST happen before any refresh that walks the Watch / Variables
+     * trees, otherwise the very first refresh would overwrite
+     * *Current_ with this pause's values and the snapshot would then
+     * rotate those values into *Baseline_, losing the "changed since last
+     * pause" signal. updateWidgets() calls refreshWatchDisplay(), so it
+     * counts as such a refresh and must be preceded by the rotation.
+     *
+     * isPauseEntryRefresh_ is also set here so that every refresh inside
+     * the pause-entry sequence — including the one triggered by
+     * updateWidgets() — gets the transient row-flash in addition to the
+     * persistent bold accent. Subsequent intra-pause refreshes
+     * (stack-frame switch, theme change, watch edit, eval) read from the
+     * same baseline and stay stable. */
+    snapshotBaselinesOnPauseEntry();
+    /* Decide whether the just-rotated baseline still describes the same
+     * Lua function at frame 0. It does not after a call or return, and the
+     * cue must be suppressed for this one pause; see
+     * changeHighlightAllowed() and updatePauseEntryFrameIdentity(). Must
+     * run before the first refresh below so the gate is in effect for
+     * every paint in the pause-entry sequence. */
+    updatePauseEntryFrameIdentity();
+    isPauseEntryRefresh_ = true;
     updateWidgets();
 
     stackSelectionLevel = 0;
+    /* Anchor the changed-value cue to the level we're about to paint at;
+     * intra-pause stack-frame switches will compare stackSelectionLevel
+     * against this and suppress the cue at every other level (see
+     * changeHighlightAllowed()). */
+    pauseEntryStackLevel_ = stackSelectionLevel;
     updateStack();
     if (variablesModel)
         {
@@ -1570,6 +1786,7 @@ void LuaDebuggerDialog::handlePause(const char *file_path, int64_t line)
     updateVariables(nullptr, QString());
     restoreVariablesExpansionState();
     refreshWatchDisplay();
+    isPauseEntryRefresh_ = false;
 
     /*
      * If an event loop is already running (e.g. we were called from a step
@@ -1648,17 +1865,50 @@ void LuaDebuggerDialog::runDebuggerStep(void (*step_fn)(void))
      */
     step_fn();
 
+    /* Synchronous re-pause: handlePause() already ran the full refresh
+     * (including the Watch tree) with debuggerPaused=true. Anything we do
+     * here would either be redundant or, worse, blank the freshly painted
+     * values back to the "—" placeholder. */
+    if (debuggerPaused)
+    {
+        return;
+    }
+
     /*
      * If handlePause() was NOT called (e.g. step landed in C code
      * and the hook didn't fire), we need to quit the event loop so
      * the original handlePause() caller can return.
      */
-    if (!debuggerPaused && eventLoop)
+    if (eventLoop)
     {
         eventLoop->quit();
     }
 
-    updateWidgets();
+    /* Update the non-Watch chrome (window title, action enabled-state, eval
+     * panel placeholder) immediately so the user sees the debugger is no
+     * longer paused. The Watch tree is a special case: a typical step
+     * re-pauses within a few ms and immediately blanking every Watch value
+     * to "—" only to repaint the same value right back looks like every
+     * row is "blinking". Defer the placeholder application; if handlePause()
+     * arrives before the timer it bumps watchPlaceholderEpoch_ and the
+     * deferred refresh becomes a no-op. If no pause arrives in the deferral
+     * window (long-running step, script ended), the placeholder is applied
+     * normally so stale values are not left displayed. */
+    updateEnabledCheckboxIcon();
+    updateStatusLabel();
+    updateContinueActionState();
+    updateEvalPanelState();
+
+    const qint32 epoch = ++watchPlaceholderEpoch_;
+    QPointer<LuaDebuggerDialog> guard(this);
+    QTimer::singleShot(WATCH_PLACEHOLDER_DEFER_MS, this, [guard, epoch]() {
+        if (!guard || guard->debuggerPaused ||
+            guard->watchPlaceholderEpoch_ != epoch)
+        {
+            return;
+        }
+        guard->refreshWatchDisplay();
+    });
 }
 
 void LuaDebuggerDialog::onStepOver()
@@ -1687,6 +1937,10 @@ void LuaDebuggerDialog::onDebuggerToggled(bool checked)
     {
         debuggerPaused = false;
         clearPausedStateUi();
+        /* Disabling the debugger breaks the "changed since last pause"
+         * chain; drop every baseline so the next enable → pause cycle
+         * starts clean instead of comparing against a stale snapshot. */
+        clearAllChangeBaselines();
     }
     updateWidgets();
 }
@@ -1805,6 +2059,24 @@ bool LuaDebuggerDialog::eventFilter(QObject *obj, QEvent *event)
     if (inDebuggerUi && event->type() == QEvent::KeyPress)
     {
         auto *ke = static_cast<QKeyEvent *>(event);
+        if (breakpointsTree &&
+            (obj == breakpointsTree || obj == breakpointsTree->viewport()))
+        {
+            if (breakpointsTree->hasFocus() ||
+                (breakpointsTree->viewport() &&
+                 breakpointsTree->viewport()->hasFocus()))
+            {
+                if ((ke->key() == Qt::Key_Delete ||
+                     ke->key() == Qt::Key_Backspace) &&
+                    ke->modifiers() == Qt::NoModifier)
+                {
+                    if (removeSelectedBreakpoints())
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
         if (watchTree && (obj == watchTree || obj == watchTree->viewport()))
         {
             if (watchTree->hasFocus() ||
@@ -1948,7 +2220,6 @@ void LuaDebuggerDialog::updateBreakpoints()
             QStandardItem *const i0 = new QStandardItem();
             QStandardItem *const i1 = new QStandardItem();
             QStandardItem *const i2 = new QStandardItem();
-            QStandardItem *const i3 = new QStandardItem();
             i0->setCheckable(true);
             i0->setCheckState(active ? Qt::Checked : Qt::Unchecked);
             i0->setData(normalizedPath, BreakpointFileRole);
@@ -1981,14 +2252,12 @@ void LuaDebuggerDialog::updateBreakpoints()
                 i2->setToolTip(tr("%1\nLine %2").arg(normalizedPath).arg(line));
             }
 
-            i3->setIcon(QIcon::fromTheme("edit-delete"));
-            i3->setToolTip(tr("Remove this breakpoint"));
             if (active && fileExists)
             {
                 hasActiveBreakpoint = true;
             }
 
-            breakpointsModel->appendRow({i0, i1, i2, i3});
+            breakpointsModel->appendRow({i0, i1, i2});
 
             /* Only add to file tree if file exists */
             if (fileExists)
@@ -2163,7 +2432,6 @@ void LuaDebuggerDialog::onStackCurrentItemChanged(const QModelIndex &current,
     syncVariablesTreeToCurrentWatch();
 }
 
-// NOLINTNEXTLINE(misc-no-recursion)
 void LuaDebuggerDialog::updateVariables(QStandardItem *parent,
                                         const QString &path)
 {
@@ -2174,6 +2442,26 @@ void LuaDebuggerDialog::updateVariables(QStandardItem *parent,
     int32_t variableCount = 0;
     wslua_variable_t *variables = wslua_debugger_get_variables(
         path.isEmpty() ? NULL : path.toUtf8().constData(), &variableCount);
+
+    /* "First-time expansion" guard for the new-child flash: the children
+     * about to be appended belong to @p path, and a child absent from
+     * baseline is only meaningfully "new" if @p path was *visited* (and
+     * therefore its then-children captured) at the previous pause. We
+     * record that directly — the companion set variablesCurrentParents_
+     * gets @p path's own change key on every paint and rotates into
+     * variablesBaselineParents_ at pause entry. Scanning baseline value
+     * keys by prefix cannot answer this question: a parent that was
+     * expanded last pause but had no children to show (e.g. a function
+     * with no locals yet, an empty table) would look identical to one
+     * that was collapsed, so the FIRST child appearing now could never
+     * flash. The level matches the one used for the child keys (Globals
+     * anchor to -1, everything else follows the current stack frame). */
+    const int parentChildLevel =
+        variablesPathIsGlobalScoped(path) ? -1 : stackSelectionLevel;
+    const QString parentVisitedKey = changeKey(parentChildLevel, path);
+    const bool parentVisitedInBaseline =
+        variablesBaselineParents_.contains(parentVisitedKey);
+    variablesCurrentParents_.insert(parentVisitedKey);
 
     if (variables)
     {
@@ -2222,6 +2510,36 @@ void LuaDebuggerDialog::updateVariables(QStandardItem *parent,
             {
                 variablesModel->appendRow({nameItem, valueItem, typeItem});
             }
+
+            /* Scope Globals watchers by level=-1 so changing the selected
+             * stack frame does not invalidate a Globals baseline. All other
+             * paths are scoped by the current stack level. */
+            const bool isGlobal = variablesPathIsGlobalScoped(f.childPath);
+            const int level = isGlobal ? -1 : stackSelectionLevel;
+            const QString vk = changeKey(level, f.childPath);
+            /* flashNew=parentVisitedInBaseline: a variable absent from
+             * the previous pause's snapshot but present now is "new" (e.g.
+             * a fresh local binding, a key added to a table, a new upvalue)
+             * and gets the same visual cue as a value change — but ONLY
+             * when @p path itself was painted at the previous pause.
+             * Otherwise this is a first-time expansion and treating every
+             * child as "new" would be visual noise, not information.
+             *
+             * Non-Globals comparisons are also gated on
+             * changeHighlightAllowed(): walking to a different stack frame
+             * inside the same pause shows locals/upvalues from an unrelated
+             * scope where comparing against the pause-entry baseline at the
+             * same numeric level would either flag every variable as "new"
+             * or compare against an unrelated previous-pause snapshot. The
+             * cue resumes automatically when the user navigates back to the
+             * pause-entry frame. Globals are anchored to level=-1 and stay
+             * comparable across frames, so they keep their highlight. */
+            const bool changed =
+                (isGlobal || changeHighlightAllowed()) &&
+                shouldMarkChanged(variablesBaseline_, vk, f.value,
+                                  /*flashNew=*/parentVisitedInBaseline);
+            applyChangedVisuals(nameItem, changed, isPauseEntryRefresh_);
+            variablesCurrent_[vk] = f.value;
 
             applyVariableExpansionIndicator(nameItem, f.canExpand,
                                             /*enabledOnlyPlaceholder=*/false);
@@ -2693,33 +3011,6 @@ void LuaDebuggerDialog::onBreakpointItemChanged(QStandardItem *item)
     }
 }
 
-void LuaDebuggerDialog::onBreakpointItemClicked(const QModelIndex &index)
-{
-    if (!index.isValid() || !breakpointsModel)
-    {
-        return;
-    }
-    QStandardItem *item = breakpointsModel->item(index.row(), 0);
-    const int column = index.column();
-    if (column == 3 && item)
-    {
-        const QString file = item->data(BreakpointFileRole).toString();
-        const int64_t lineNumber =
-            item->data(BreakpointLineRole).toLongLong();
-        wslua_debugger_remove_breakpoint(file.toUtf8().constData(), lineNumber);
-        updateBreakpoints();
-
-        const qint32 tabCount = static_cast<qint32>(ui->codeTabWidget->count());
-        for (qint32 tabIndex = 0; tabIndex < tabCount; ++tabIndex)
-        {
-            LuaDebuggerCodeView *tabView = qobject_cast<LuaDebuggerCodeView *>(
-                ui->codeTabWidget->widget(static_cast<int>(tabIndex)));
-            if (tabView && tabView->getFilename() == file)
-                tabView->updateBreakpointMarkers();
-        }
-    }
-}
-
 void LuaDebuggerDialog::onBreakpointItemDoubleClicked(const QModelIndex &index)
 {
     if (!index.isValid() || !breakpointsModel)
@@ -2738,6 +3029,139 @@ void LuaDebuggerDialog::onBreakpointItemDoubleClicked(const QModelIndex &index)
     if (view)
     {
         view->moveCaretToLineStart(static_cast<qint32>(lineNumber));
+    }
+}
+
+bool LuaDebuggerDialog::removeBreakpointRows(const QList<int> &rows)
+{
+    if (!breakpointsModel || rows.isEmpty())
+    {
+        return false;
+    }
+
+    /* Collect (file, line) pairs for the requested rows before touching the
+     * model: rebuilding the model in updateBreakpoints() would invalidate
+     * any QStandardItem pointers we held. De-duplicate row indices so callers
+     * can pass selectionModel()->selectedIndexes() directly. */
+    QVector<QPair<QString, int64_t>> toRemove;
+    QSet<int> seenRows;
+    for (int row : rows)
+    {
+        if (row < 0 || seenRows.contains(row))
+        {
+            continue;
+        }
+        seenRows.insert(row);
+        QStandardItem *const row0 = breakpointsModel->item(row, 0);
+        if (!row0)
+        {
+            continue;
+        }
+        toRemove.append({row0->data(BreakpointFileRole).toString(),
+                         row0->data(BreakpointLineRole).toLongLong()});
+    }
+    if (toRemove.isEmpty())
+    {
+        return false;
+    }
+
+    QSet<QString> touchedFiles;
+    for (const auto &bp : toRemove)
+    {
+        wslua_debugger_remove_breakpoint(bp.first.toUtf8().constData(),
+                                         bp.second);
+        touchedFiles.insert(bp.first);
+    }
+    updateBreakpoints();
+
+    const qint32 tabCount = static_cast<qint32>(ui->codeTabWidget->count());
+    for (qint32 tabIndex = 0; tabIndex < tabCount; ++tabIndex)
+    {
+        LuaDebuggerCodeView *tabView = qobject_cast<LuaDebuggerCodeView *>(
+            ui->codeTabWidget->widget(static_cast<int>(tabIndex)));
+        if (tabView && touchedFiles.contains(tabView->getFilename()))
+        {
+            tabView->updateBreakpointMarkers();
+        }
+    }
+    return true;
+}
+
+bool LuaDebuggerDialog::removeSelectedBreakpoints()
+{
+    if (!breakpointsTree)
+    {
+        return false;
+    }
+    QItemSelectionModel *const sm = breakpointsTree->selectionModel();
+    if (!sm)
+    {
+        return false;
+    }
+    QList<int> rows;
+    for (const QModelIndex &ix : sm->selectedIndexes())
+    {
+        if (ix.isValid())
+        {
+            rows.append(ix.row());
+        }
+    }
+    return removeBreakpointRows(rows);
+}
+
+void LuaDebuggerDialog::onBreakpointContextMenuRequested(const QPoint &pos)
+{
+    if (!breakpointsTree || !breakpointsModel)
+    {
+        return;
+    }
+
+    const QModelIndex ix = breakpointsTree->indexAt(pos);
+    /* Ensure the row under the cursor is part of the selection so "Remove"
+     * operates on something sensible even when the user right-clicks a row
+     * that was not previously selected. */
+    if (ix.isValid() && breakpointsTree->selectionModel() &&
+        !breakpointsTree->selectionModel()->isRowSelected(
+            ix.row(), ix.parent()))
+    {
+        breakpointsTree->setCurrentIndex(ix);
+    }
+
+    QMenu menu(this);
+    QAction *removeAct = nullptr;
+    if (ix.isValid())
+    {
+        removeAct = menu.addAction(tr("Remove"));
+        removeAct->setShortcut(QKeySequence(QKeySequence::Delete));
+    }
+    QAction *removeAllAct = nullptr;
+    if (breakpointsModel->rowCount() > 0)
+    {
+        if (removeAct)
+        {
+            menu.addSeparator();
+        }
+        removeAllAct = menu.addAction(tr("Remove All Breakpoints"));
+    }
+    if (menu.isEmpty())
+    {
+        return;
+    }
+
+    QAction *chosen = menu.exec(breakpointsTree->viewport()->mapToGlobal(pos));
+    if (!chosen)
+    {
+        return;
+    }
+    if (chosen == removeAct)
+    {
+        removeSelectedBreakpoints();
+        return;
+    }
+    if (chosen == removeAllAct)
+    {
+        onClearBreakpoints();
+        return;
     }
 }
 
@@ -2838,7 +3262,8 @@ void LuaDebuggerDialog::onCodeViewContextMenu(const QPoint &pos)
         {
             menu.addSeparator();
             QAction *addWatch =
-                menu.addAction(tr("Add Watch…"));
+                menu.addAction(tr("Add Watch"));
+            addWatch->setShortcut(ui->actionAddWatch->shortcut());
             connect(addWatch, &QAction::triggered,
                     [this, selectedText]()
                     {
@@ -2952,6 +3377,14 @@ void LuaDebuggerDialog::onLuaReloadCallback()
     LuaDebuggerDialog *dialog = _instance;
     if (dialog)
     {
+        /*
+         * Plugin reload wipes the Lua state, so the set of variables /
+         * locals / globals the user is looking at may be meaningless after
+         * reload. Reset all baselines to avoid falsely flagging values as
+         * "changed" simply because the world was rebuilt.
+         */
+        dialog->clearAllChangeBaselines();
+
         /*
          * If the debugger was paused, the UI layer called
          * wslua_debugger_notify_reload() which disabled the debugger
@@ -3078,6 +3511,10 @@ void LuaDebuggerDialog::applyCodeViewThemes()
 {
     ui->luaDebuggerFindFrame->updateStyleSheet();
     ui->luaDebuggerGoToLineFrame->updateStyleSheet();
+    /* Theme / palette changed — recompute the accent + flash brushes used
+     * by applyChangedVisuals so the Watch and Variables cues track the
+     * active light/dark theme. */
+    refreshChangedValueBrushes();
     if (!ui->codeTabWidget)
     {
         return;
@@ -3512,6 +3949,7 @@ void LuaDebuggerDialog::onVariablesContextMenuRequested(const QPoint &pos)
                                             ? varPath.left(48) +
                                                   QStringLiteral("…")
                                             : varPath));
+            addWatch->setShortcut(ui->actionAddWatch->shortcut());
             connect(addWatch, &QAction::triggered, this,
                     [this, varPath]() { addPathWatch(varPath); });
         }
@@ -3568,6 +4006,56 @@ void LuaDebuggerDialog::applyCodeEditorFonts(const QFont &monoFont)
     }
 }
 
+/**
+ * @brief Walk the watch @c QStandardItemModel tree: set each item’s
+ * @c QFont to the panel monospace while preserving the existing bold bit
+ * (change-highlight) so it wins over the tree widget font after row moves.
+ */
+// NOLINTNEXTLINE(misc-no-recursion)
+static void reapplyMonospaceToWatchItemModelRecursive(const QFont &base,
+                                                      QStandardItemModel *m,
+                                                      const QModelIndex &parent)
+{
+    if (!m)
+    {
+        return;
+    }
+    const int rows = m->rowCount(parent);
+    const int cols = m->columnCount(parent);
+    for (int r = 0; r < rows; ++r)
+    {
+        for (int c = 0; c < cols; ++c)
+        {
+            const QModelIndex idx = m->index(r, c, parent);
+            if (QStandardItem *it = m->itemFromIndex(idx))
+            {
+                QFont f = base;
+                f.setBold(it->font().bold());
+                it->setFont(f);
+            }
+        }
+        const QModelIndex col0 = m->index(r, 0, parent);
+        if (col0.isValid() && m->rowCount(col0) > 0)
+        {
+            reapplyMonospaceToWatchItemModelRecursive(base, m, col0);
+        }
+    }
+}
+
+void LuaDebuggerDialog::reapplyMonospaceToWatchItemFonts()
+{
+    if (!watchModel)
+    {
+        return;
+    }
+    reapplyMonospaceToWatchItemModelRecursive(
+        effectiveMonospaceFont(false), watchModel, QModelIndex());
+    if (watchTree)
+    {
+        watchTree->update();
+    }
+}
+
 void LuaDebuggerDialog::applyMonospacePanelFonts()
 {
     const QFont panelMono = effectiveMonospaceFont(false);
@@ -3593,6 +4081,7 @@ void LuaDebuggerDialog::applyMonospacePanelFonts()
             tree->header()->setFont(headerFont);
         }
     }
+    reapplyMonospaceToWatchItemFonts();
 }
 
 QFont LuaDebuggerDialog::effectiveMonospaceFont(bool zoomed) const
@@ -3934,6 +4423,15 @@ void LuaDebuggerDialog::rebuildWatchTreeFromSettings()
         return;
     }
     watchModel->removeRows(0, watchModel->rowCount());
+    /* The tree is being repopulated from settings; any stale baselines for
+     * specs that end up in the tree will be rebuilt naturally on the next
+     * refresh. Wipe everything so a fresh session starts with no "changed"
+     * flags. Variables baselines are kept because they are not tied to
+     * watch specs. */
+    watchRootBaseline_.clear();
+    watchRootCurrent_.clear();
+    watchChildBaseline_.clear();
+    watchChildCurrent_.clear();
     /* The watch list on disk is a flat array of canonical spec strings.
      * Values that are not a valid path watch, or that are not strings, are
      * silently dropped (see wslua_debugger_watch_spec_uses_path_resolution). */
@@ -4017,6 +4515,9 @@ void LuaDebuggerDialog::deleteWatchRows(const QList<QStandardItem *> &items)
     {
         watchModel->removeRow(idx);
     }
+    /* After deletion, drop baselines for specs that are no longer present
+     * in the tree so a later "Add Watch" of the same spec starts clean. */
+    pruneChangeBaselinesToLiveWatchSpecs();
     refreshWatchDisplay();
 }
 
@@ -4104,24 +4605,29 @@ void LuaDebuggerDialog::onVariablesCurrentItemChanged(
     }
     QStandardItem *curItem =
         variablesModel->itemFromIndex(current.sibling(current.row(), 0));
-    if (!curItem)
+    QStandardItem *watch = nullptr;
+    if (curItem)
     {
-        return;
-    }
-    const QString path = curItem->data(VariablePathRole).toString();
-    if (path.isEmpty())
-    {
-        return;
-    }
-    QStandardItem *watch = findWatchRootForVariablePath(path);
-    if (!watch)
-    {
-        return;
+        const QString path = curItem->data(VariablePathRole).toString();
+        if (!path.isEmpty())
+        {
+            watch = findWatchRootForVariablePath(path);
+        }
     }
     syncWatchVariablesSelection_ = true;
-    const QModelIndex wix = watchModel->indexFromItem(watch);
-    watchTree->setCurrentIndex(wix);
-    watchTree->scrollTo(wix);
+    if (watch)
+    {
+        const QModelIndex wix = watchModel->indexFromItem(watch);
+        watchTree->setCurrentIndex(wix);
+        watchTree->scrollTo(wix);
+    }
+    else if (QItemSelectionModel *sm = watchTree->selectionModel())
+    {
+        /* No matching watch for this Variables row — clear the stale
+         * Watch selection so the two trees stay in sync. */
+        sm->clearSelection();
+        sm->setCurrentIndex(QModelIndex(), QItemSelectionModel::Clear);
+    }
     syncWatchVariablesSelection_ = false;
 }
 
@@ -4136,38 +4642,42 @@ void LuaDebuggerDialog::syncVariablesTreeToCurrentWatch()
         watchModel
             ? watchModel->itemFromIndex(curIx.sibling(curIx.row(), 0))
             : nullptr;
-    if (!cur || cur->parent() != nullptr)
+    QStandardItem *v = nullptr;
+    if (cur && cur->parent() == nullptr)
     {
-        return;
-    }
-    const QString spec = cur->data(WatchSpecRole).toString();
-    if (spec.isEmpty())
-    {
-        return;
-    }
-    QString path = cur->data(VariablePathRole).toString();
-    if (path.isEmpty())
-    {
-        path = watchResolvedVariablePathForTooltip(spec);
-        if (path.isEmpty())
+        const QString spec = cur->data(WatchSpecRole).toString();
+        if (!spec.isEmpty())
         {
-            path = watchVariablePathForSpec(spec);
+            QString path = cur->data(VariablePathRole).toString();
+            if (path.isEmpty())
+            {
+                path = watchResolvedVariablePathForTooltip(spec);
+                if (path.isEmpty())
+                {
+                    path = watchVariablePathForSpec(spec);
+                }
+            }
+            if (!path.isEmpty())
+            {
+                v = findVariablesItemByPath(path);
+            }
         }
     }
-    if (path.isEmpty())
-    {
-        return;
-    }
-    QStandardItem *v = findVariablesItemByPath(path);
-    if (!v)
-    {
-        return;
-    }
     syncWatchVariablesSelection_ = true;
-    expandAncestorsOf(variablesTree, variablesModel, v);
-    const QModelIndex vix = variablesModel->indexFromItem(v);
-    variablesTree->setCurrentIndex(vix);
-    variablesTree->scrollTo(vix);
+    if (v)
+    {
+        expandAncestorsOf(variablesTree, variablesModel, v);
+        const QModelIndex vix = variablesModel->indexFromItem(v);
+        variablesTree->setCurrentIndex(vix);
+        variablesTree->scrollTo(vix);
+    }
+    else if (QItemSelectionModel *sm = variablesTree->selectionModel())
+    {
+        /* No matching Variables row for the current watch — clear the
+         * stale Variables selection so the two trees stay in sync. */
+        sm->clearSelection();
+        sm->setCurrentIndex(QModelIndex(), QItemSelectionModel::Clear);
+    }
     syncWatchVariablesSelection_ = false;
 }
 
@@ -4182,32 +4692,391 @@ void LuaDebuggerDialog::onWatchCurrentItemChanged(const QModelIndex &current,
     }
     QStandardItem *rowItem =
         watchModel->itemFromIndex(current.sibling(current.row(), 0));
-    if (!rowItem || rowItem->parent() != nullptr)
+    const QString spec =
+        (rowItem && rowItem->parent() == nullptr)
+            ? rowItem->data(WatchSpecRole).toString()
+            : QString();
+
+    if (!spec.isEmpty())
+    {
+        const bool live = wslua_debugger_is_enabled() && debuggerPaused &&
+                          wslua_debugger_is_paused();
+        if (live)
+        {
+            const int32_t desired =
+                wslua_debugger_find_stack_level_for_watch_spec(
+                    spec.toUtf8().constData());
+            if (desired >= 0 && desired != stackSelectionLevel)
+            {
+                stackSelectionLevel = static_cast<int>(desired);
+                wslua_debugger_set_variable_stack_level(desired);
+                refreshVariablesForCurrentStackFrame();
+                updateStack();
+            }
+        }
+    }
+
+    /* Always sync: when the current watch has no resolvable path, the
+     * helper clears the stale Variables selection. */
+    syncVariablesTreeToCurrentWatch();
+}
+
+namespace
+{
+/**
+ * Blend two RGB colors by @a alpha (0 = all @a base, 255 = all @a accent).
+ * Used to build a theme-aware transient flash background that sits at a
+ * low opacity over the view's base color so it does not overpower the
+ * text or the selection highlight.
+ */
+static QColor blendRgb(const QColor &base, const QColor &accent, int alpha)
+{
+    const int a = std::max(0, std::min(255, alpha));
+    const int inv = 255 - a;
+    return QColor::fromRgb(
+        (base.red() * inv + accent.red() * a) / 255,
+        (base.green() * inv + accent.green() * a) / 255,
+        (base.blue() * inv + accent.blue() * a) / 255);
+}
+} // namespace
+
+void LuaDebuggerDialog::refreshChangedValueBrushes()
+{
+    /* Use the Qt palette so the accent and flash follow the current theme
+     * (light / dark / system). QPalette::Link is the most reliable "accent"
+     * role Qt exposes across platforms; QPalette::Highlight is the selection
+     * color and makes for a recognizable flash. */
+    QPalette pal = palette();
+    if (watchTree)
+    {
+        pal = watchTree->palette();
+    }
+    QColor accent = pal.color(QPalette::Link);
+    if (!accent.isValid())
+    {
+        accent = pal.color(QPalette::Highlight);
+    }
+    if (!accent.isValid())
+    {
+        accent = QColor(0x1F, 0x6F, 0xEB); // reasonable fallback
+    }
+    changedValueBrush_ = QBrush(accent);
+
+    const QColor base = pal.color(QPalette::Base);
+    const QColor hi = pal.color(QPalette::Highlight);
+    /* ~20% opacity mix feels visible on light themes and doesn't wash out
+     * text on dark themes. Pre-blend with Base so the resulting solid color
+     * renders the same regardless of whether the style composites alpha. */
+    changedFlashBrush_ = QBrush(blendRgb(base, hi, 50));
+}
+
+void LuaDebuggerDialog::snapshotBaselinesOnPauseEntry()
+{
+    /* Rotate Current → Baseline for every changed-tracking map, then clear
+     * Current. The paint helpers will repopulate Current with this pause's
+     * displayed values as they run. Missing keys mean "no baseline yet"
+     * and deliberately do not light up as "changed" on the first sighting. */
+    watchRootBaseline_ = std::move(watchRootCurrent_);
+    watchRootCurrent_.clear();
+    watchChildBaseline_ = std::move(watchChildCurrent_);
+    watchChildCurrent_.clear();
+    variablesBaseline_ = std::move(variablesCurrent_);
+    variablesCurrent_.clear();
+    /* Rotate the parent-visited sets in lockstep with the value maps;
+     * the gate they feed (parent visited last pause?) is meaningful only
+     * relative to the same rotation boundary. */
+    variablesBaselineParents_ = std::move(variablesCurrentParents_);
+    variablesCurrentParents_.clear();
+    watchChildBaselineParents_ = std::move(watchChildCurrentParents_);
+    watchChildCurrentParents_.clear();
+}
+
+void LuaDebuggerDialog::updatePauseEntryFrameIdentity()
+{
+    /* Compute "<source>:<linedefined>" for the function at frame 0 and
+     * compare against the identity captured at the previous pause. The
+     * baseline rotation just done in snapshotBaselinesOnPauseEntry() keys
+     * Locals/Upvalues at numeric stack level 0 — that is meaningful only
+     * if frame 0 is still the same Lua function. After a call or return
+     * it is a different function whose locals never lived under those
+     * keys, so changeHighlightAllowed() must report false for one pause
+     * (Globals are unaffected; they are anchored to level=-1).
+     *
+     * Self-correcting: painting still runs, so the next pause's rotate
+     * will leave Baseline holding values that match the new function. */
+    int32_t frameCount = 0;
+    wslua_stack_frame_t *stack = wslua_debugger_get_stack(&frameCount);
+
+    QString newIdentity;
+    if (stack && frameCount > 0)
+    {
+        const char *src = stack[0].source ? stack[0].source : "";
+        newIdentity =
+            QStringLiteral("%1:%2").arg(QString::fromUtf8(src)).arg(
+                static_cast<qlonglong>(stack[0].linedefined));
+    }
+    if (stack)
+    {
+        wslua_debugger_free_stack(stack, frameCount);
+    }
+
+    /* Empty newIdentity (no frames at all — should not happen at a real
+     * pause, but be defensive) is treated as "different from anything",
+     * so the cue is suppressed. The match flag is also false on the very
+     * first pause because pauseEntryFrame0Identity_ starts empty; that is
+     * harmless because the baselines are empty too. */
+    pauseEntryFrame0MatchesPrev_ =
+        !newIdentity.isEmpty() && newIdentity == pauseEntryFrame0Identity_;
+    pauseEntryFrame0Identity_ = newIdentity;
+}
+
+namespace
+{
+/**
+ * Collect every column-cell in the same row as @p anchor (inclusive).
+ * Works for both top-level rows (anchor->parent() == nullptr) and child
+ * rows. Cells with different models, or missing columns, are skipped.
+ */
+static QVector<QStandardItem *> rowCellsFor(QStandardItem *anchor)
+{
+    QVector<QStandardItem *> out;
+    if (!anchor)
+    {
+        return out;
+    }
+    auto *model = qobject_cast<QStandardItemModel *>(anchor->model());
+    if (!model)
+    {
+        return out;
+    }
+    const int cols = model->columnCount();
+    QStandardItem *parent = anchor->parent();
+    const int row = anchor->row();
+    for (int c = 0; c < cols; ++c)
+    {
+        QStandardItem *cell = parent ? parent->child(row, c)
+                                     : model->item(row, c);
+        if (cell)
+        {
+            out.append(cell);
+        }
+    }
+    return out;
+}
+
+/**
+ * Schedule a one-shot clear for @p cell tagged with @p serial. The clear
+ * only runs if the cell's current serial still matches, so a newer flash
+ * installed on the same cell is not wiped by a stale timer.
+ */
+static void scheduleFlashClear(QObject *owner, QStandardItem *cell,
+                               qint32 serial, int delayMs)
+{
+    if (!cell || !cell->model())
     {
         return;
     }
-    const QString spec = rowItem->data(WatchSpecRole).toString();
+    QPointer<QAbstractItemModel> modelGuard(cell->model());
+    const QPersistentModelIndex pix(cell->index());
+    QTimer::singleShot(delayMs, owner, [modelGuard, pix, serial]() {
+        if (!modelGuard || !pix.isValid())
+        {
+            return;
+        }
+        auto *sim =
+            qobject_cast<QStandardItemModel *>(modelGuard.data());
+        if (!sim)
+        {
+            return;
+        }
+        QStandardItem *c = sim->itemFromIndex(pix);
+        if (!c)
+        {
+            return;
+        }
+        if (c->data(ChangedFlashSerialRole).toInt() != serial)
+        {
+            return;
+        }
+        c->setBackground(QBrush());
+        c->setData(QVariant(), ChangedFlashSerialRole);
+    });
+}
+} // namespace
+
+void LuaDebuggerDialog::applyChangedVisuals(QStandardItem *anchor,
+                                            bool changed,
+                                            bool isPauseEntryRefresh)
+{
+    if (!anchor)
+    {
+        return;
+    }
+
+    const QVector<QStandardItem *> cells = rowCellsFor(anchor);
+    if (cells.isEmpty())
+    {
+        return;
+    }
+
+    if (changed)
+    {
+        /* One serial per row-flash; every cell in the row tags itself with
+         * the same serial so a re-flash on this row cleanly supersedes the
+         * previous row-flash's pending timers. */
+        const qint32 serial =
+            isPauseEntryRefresh ? ++flashSerial_ : 0;
+        for (QStandardItem *cell : cells)
+        {
+            QFont f = cell->font();
+            f.setBold(true);
+            cell->setFont(f);
+            cell->setForeground(changedValueBrush_);
+            if (isPauseEntryRefresh)
+            {
+                cell->setData(serial, ChangedFlashSerialRole);
+                cell->setBackground(changedFlashBrush_);
+                scheduleFlashClear(this, cell, serial, CHANGED_FLASH_MS);
+            }
+        }
+    }
+    else
+    {
+        /* Clear ONLY the change-specific visuals (bold, and any flash this
+         * helper installed). Leave the caller-managed foreground /
+         * background untouched so error chrome (red) and the no-live-
+         * context placeholder coloring survive. A pending flash timer is
+         * cancelled by invalidating the serial. */
+        for (QStandardItem *cell : cells)
+        {
+            QFont f = cell->font();
+            f.setBold(false);
+            cell->setFont(f);
+            if (cell->data(ChangedFlashSerialRole).isValid())
+            {
+                cell->setData(QVariant(), ChangedFlashSerialRole);
+                cell->setBackground(QBrush());
+            }
+        }
+    }
+}
+
+void LuaDebuggerDialog::clearAllChangeBaselines()
+{
+    watchRootBaseline_.clear();
+    watchRootCurrent_.clear();
+    watchChildBaseline_.clear();
+    watchChildCurrent_.clear();
+    variablesBaseline_.clear();
+    variablesCurrent_.clear();
+    variablesBaselineParents_.clear();
+    variablesCurrentParents_.clear();
+    watchChildBaselineParents_.clear();
+    watchChildCurrentParents_.clear();
+    /* The frame-0 identity gate is part of the same "comparable across
+     * pauses" contract: a debugger toggle or Lua reload also breaks that
+     * contract, and starting the next session by comparing against a
+     * stale identity would suppress the cue on the very first pause for
+     * no reason. */
+    pauseEntryFrame0Identity_.clear();
+    pauseEntryFrame0MatchesPrev_ = false;
+}
+
+void LuaDebuggerDialog::clearChangeBaselinesForWatchSpec(const QString &spec)
+{
     if (spec.isEmpty())
     {
         return;
     }
-
-    const bool live = wslua_debugger_is_enabled() && debuggerPaused &&
-                      wslua_debugger_is_paused();
-    if (live)
+    const auto matches = [&spec](const QString &key)
     {
-        const int32_t desired = wslua_debugger_find_stack_level_for_watch_spec(
-            spec.toUtf8().constData());
-        if (desired >= 0 && desired != stackSelectionLevel)
+        return watchSpecFromChangeKey(key) == spec;
+    };
+    for (auto *m : {&watchRootBaseline_, &watchRootCurrent_})
+    {
+        for (auto it = m->begin(); it != m->end();)
         {
-            stackSelectionLevel = static_cast<int>(desired);
-            wslua_debugger_set_variable_stack_level(desired);
-            refreshVariablesForCurrentStackFrame();
-            updateStack();
+            if (matches(it.key()))
+            {
+                it = m->erase(it);
+            }
+            else
+            {
+                ++it;
+            }
         }
     }
+    for (auto *m : {&watchChildBaseline_, &watchChildCurrent_})
+    {
+        for (auto it = m->begin(); it != m->end();)
+        {
+            if (matches(it.key()))
+            {
+                it = m->erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    }
+    for (auto *m : {&watchChildBaselineParents_, &watchChildCurrentParents_})
+    {
+        for (auto it = m->begin(); it != m->end();)
+        {
+            if (matches(it.key()))
+            {
+                it = m->erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    }
+}
 
-    syncVariablesTreeToCurrentWatch();
+void LuaDebuggerDialog::pruneChangeBaselinesToLiveWatchSpecs()
+{
+    if (!watchModel)
+    {
+        return;
+    }
+    QSet<QString> liveSpecs;
+    const int n = watchModel->rowCount();
+    for (int i = 0; i < n; ++i)
+    {
+        const QStandardItem *it = watchModel->item(i);
+        if (!it)
+        {
+            continue;
+        }
+        const QString spec = it->data(WatchSpecRole).toString();
+        if (!spec.isEmpty())
+        {
+            liveSpecs.insert(spec);
+        }
+    }
+    const auto pruneMap = [&](auto &m)
+    {
+        for (auto it = m.begin(); it != m.end();)
+        {
+            if (!liveSpecs.contains(watchSpecFromChangeKey(it.key())))
+            {
+                it = m.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    };
+    pruneMap(watchRootBaseline_);
+    pruneMap(watchRootCurrent_);
+    pruneMap(watchChildBaseline_);
+    pruneMap(watchChildCurrent_);
+    pruneMap(watchChildBaselineParents_);
+    pruneMap(watchChildCurrentParents_);
 }
 
 void LuaDebuggerDialog::refreshWatchDisplay()
@@ -4251,10 +5120,8 @@ void LuaDebuggerDialog::applyWatchItemEmpty(QStandardItem *item,
         capWatchTooltipText(
             tr("No watch path entered yet — enter a variable path in the "
                "Watch column to see a value here.")));
-    QFont f1 = cellAt(watchModel, item, 1) ? cellAt(watchModel, item, 1)->font()
-                                           : QFont();
-    f1.setBold(false);
-    LuaDebuggerItems::setFont(watchModel, item, 1, f1);
+    applyChangedVisuals(item,
+                        /*changed=*/false, /*isPauseEntryRefresh=*/false);
     while (item->rowCount() > 0)
     {
         item->removeRow(0);
@@ -4282,11 +5149,8 @@ void LuaDebuggerDialog::applyWatchItemNonPath(QStandardItem *item,
     LuaDebuggerItems::setToolTip(
         watchModel, item, 1,
         capWatchTooltipText(tr("Only variable paths can be watched.")));
-    QFont fe = cellAt(watchModel, item, 1) ? cellAt(watchModel, item, 1)->font()
-                                           : QFont();
-    fe.setBold(false);
-    LuaDebuggerItems::setFont(watchModel, item, 1, fe);
-    item->setData(QVariant(), WatchChildSnapRole);
+    applyChangedVisuals(item,
+                        /*changed=*/false, /*isPauseEntryRefresh=*/false);
     while (item->rowCount() > 0)
     {
         item->removeRow(0);
@@ -4322,14 +5186,22 @@ void LuaDebuggerDialog::applyWatchItemNoLiveContext(QStandardItem *item,
             watchTipExtra));
     LuaDebuggerItems::setToolTip(watchModel, item, 1,
                             capWatchTooltipText(mutedReason));
-    QFont f1 = cellAt(watchModel, item, 1) ? cellAt(watchModel, item, 1)->font()
-                                           : QFont();
-    f1.setBold(false);
-    LuaDebuggerItems::setFont(watchModel, item, 1, f1);
-    item->setData(QVariant(), WatchLastValueRole);
+    /* Clear the accent/bold/flash but do NOT touch the baseline maps:
+     * bold-on-change must survive resume → pause cycles so the next pause
+     * can compare against the value displayed at the end of this pause.
+     * applyChangedVisuals(false) only unbolds; it leaves the caller's
+     * foreground / background intact, so the placeholder brush set above
+     * and the normal column-0 text stay as the caller wants. */
+    applyChangedVisuals(item,
+                        /*changed=*/false, /*isPauseEntryRefresh=*/false);
+    /* A previous pause may have left the Watch-column (col 0) foreground
+     * set to the accent. Reset it to the default text color so the spec
+     * looks normal while unpaused. */
+    LuaDebuggerItems::setForeground(
+        watchModel, item, 0,
+        watchTree->palette().brush(QPalette::Text));
     if (item->parent() == nullptr)
     {
-        item->setData(QVariant(), WatchChildSnapRole);
         while (item->rowCount() > 0)
         {
             item->removeRow(0);
@@ -4356,7 +5228,19 @@ void LuaDebuggerDialog::applyWatchItemError(QStandardItem *item,
         capWatchTooltipText(
             QStringLiteral("%1\n%2\n%3")
                 .arg(tr("Invalid watch path."), errStr, ttSuf)));
-    item->setData(QVariant(), WatchChildSnapRole);
+    applyChangedVisuals(item,
+                        /*changed=*/false, /*isPauseEntryRefresh=*/false);
+    /* An error invalidates the comparison: drop baselines for this root so
+     * the next successful evaluation does not flag a change vs the pre-error
+     * value. */
+    if (item->parent() == nullptr)
+    {
+        const QString spec = item->data(WatchSpecRole).toString();
+        if (!spec.isEmpty())
+        {
+            clearChangeBaselinesForWatchSpec(spec);
+        }
+    }
     while (item->rowCount() > 0)
     {
         item->removeRow(0);
@@ -4379,7 +5263,6 @@ void LuaDebuggerDialog::applyWatchItemSuccess(QStandardItem *item,
     }
     const QString v = val ? QString::fromUtf8(val) : QString();
     const QString typStr = typ ? QString::fromUtf8(typ) : QString();
-    const QString prev = item->data(WatchLastValueRole).toString();
     setText(watchModel, item, 1, v);
     const QString ttSuf =
         typStr.isEmpty() ? QString() : tr("Type: %1").arg(typStr);
@@ -4393,11 +5276,18 @@ void LuaDebuggerDialog::applyWatchItemSuccess(QStandardItem *item,
         watchModel, item, 1,
         capWatchTooltipText(
             ttSuf.isEmpty() ? v : QStringLiteral("%1\n%2").arg(v, ttSuf)));
-    QFont f1 = cellAt(watchModel, item, 1) ? cellAt(watchModel, item, 1)->font()
-                                           : QFont();
-    f1.setBold(!prev.isEmpty() && prev != v);
-    LuaDebuggerItems::setFont(watchModel, item, 1, f1);
-    item->setData(v, WatchLastValueRole);
+    /* Only watch roots are routed through applyWatchItemSuccess; children go
+     * through applyWatchChildRowTextAndTooltip + applyChangedVisuals inside
+     * fillWatchPathChildren. The Globals branch is excluded from
+     * changeHighlightAllowed() because it is anchored to level=-1 and
+     * therefore stays comparable across stack-frame switches. */
+    const bool isGlobal = watchSpecIsGlobalScoped(spec);
+    const int level = isGlobal ? -1 : stackSelectionLevel;
+    const QString rk = changeKey(level, spec);
+    const bool changed = (isGlobal || changeHighlightAllowed()) &&
+                         shouldMarkChanged(watchRootBaseline_, rk, v);
+    applyChangedVisuals(item, changed, isPauseEntryRefresh_);
+    watchRootCurrent_[rk] = v;
 
     if (can_expand)
     {
@@ -4506,6 +5396,32 @@ void LuaDebuggerDialog::fillWatchPathChildren(QStandardItem *parent,
         return;
     }
 
+    const QStandardItem *const rootWatch = watchRootItem(parent);
+    const QString rootSpec =
+        rootWatch ? rootWatch->data(WatchSpecRole).toString() : QString();
+    const bool rootIsGlobal = watchSpecIsGlobalScoped(rootSpec);
+    const int rootLevel = rootIsGlobal ? -1 : stackSelectionLevel;
+    const QString rootKey = changeKey(rootLevel, rootSpec);
+    auto &baseline = watchChildBaseline_[rootKey];
+    auto &current = watchChildCurrent_[rootKey];
+    /* Globals-scoped roots are anchored to level=-1 and stay comparable
+     * across stack-frame switches; everything else is suppressed when the
+     * user has navigated away from the pause-entry frame (see
+     * changeHighlightAllowed()). */
+    const bool highlightAllowed = rootIsGlobal || changeHighlightAllowed();
+    /* "First-time expansion" guard, mirror of the one in updateVariables():
+     * a child absent from baseline is only meaningfully "new" if the
+     * parent @p path was painted at the previous pause. We record that
+     * fact directly via the visited-parents companion set; scanning the
+     * value baseline by prefix cannot tell "collapsed last pause" apart
+     * from "expanded last pause with no children yet", so the FIRST
+     * child to appear under a parent that has always been empty (an
+     * empty table just got its first key) would otherwise never flash. */
+    auto &baselineParents = watchChildBaselineParents_[rootKey];
+    auto &currentParents = watchChildCurrentParents_[rootKey];
+    const bool parentVisitedInBaseline = baselineParents.contains(path);
+    currentParents.insert(path);
+
     for (int32_t variableIndex = 0; variableIndex < variableCount;
          ++variableIndex)
     {
@@ -4523,7 +5439,24 @@ void LuaDebuggerDialog::fillWatchPathChildren(QStandardItem *parent,
 
         parent->appendRow({nameItem, valueItem});
 
-        applyWatchChildRowPresentation(nameItem, f.childPath, f.value, f.type);
+        applyWatchChildRowTextAndTooltip(nameItem, f.value, f.type);
+
+        /* flashNew=parentVisitedInBaseline: a child key that appeared
+         * since the previous pause inside an already-visited watch path
+         * is a legitimate change (e.g. a new key inserted into a table)
+         * and gets the cue. But when the user expands a parent for the
+         * first time, the parent itself was never painted at the previous
+         * pause, so lighting up the whole subtree as "new" is misleading. The whole
+         * comparison is also gated on highlightAllowed (see above) to
+         * suppress the cue when the user is browsing a different stack
+         * frame than the pause was entered at — Globals-scoped roots are
+         * exempt and stay comparable. */
+        const bool changed =
+            highlightAllowed &&
+            shouldMarkChanged(baseline, f.childPath, f.value,
+                              /*flashNew=*/parentVisitedInBaseline);
+        applyChangedVisuals(nameItem, changed, isPauseEntryRefresh_);
+        current[f.childPath] = f.value;
 
         applyVariableExpansionIndicator(nameItem, f.canExpand,
                                         /*enabledOnlyPlaceholder=*/true,
@@ -4812,10 +5745,10 @@ struct WatchContextMenuActions
 {
     QAction *addWatch = nullptr;
     QAction *copyValue = nullptr;
-    QAction *remove = nullptr;
     QAction *duplicate = nullptr;
-    QAction *moveUp = nullptr;
-    QAction *moveDown = nullptr;
+    QAction *editWatch = nullptr;
+    QAction *remove = nullptr;
+    QAction *removeAllWatches = nullptr;
 };
 } /* namespace */
 
@@ -4824,21 +5757,39 @@ struct WatchContextMenuActions
  * @a item (may be null / a child row), returning pointers to each action
  * so the caller can dispatch on the chosen QAction.
  *
- * Sub-element rows (descendants of a watch root) only expose `Add Watch…`
- * and `Copy Value`; the remaining entries (Remove, Duplicate, Move
- * Up/Down) operate on the watch list itself and therefore only make
- * sense on watch roots.
+ * Sub-element rows (descendants of a watch root) only expose `Add Watch`
+ * and `Copy Value`. Watch roots also get duplicate, edit, copy value, remove
+ * one, and remove all.
  */
-static void buildWatchContextMenu(QMenu &menu, QStandardItem *item,
-                                  WatchContextMenuActions *acts)
+static void buildWatchContextMenu(
+    QMenu &menu, QStandardItem *item, WatchContextMenuActions *acts,
+    const QStandardItemModel *watchModel, const QKeySequence &addWatchShortcut)
 {
-    acts->addWatch = menu.addAction(QObject::tr("Add Watch…"));
+    acts->addWatch = menu.addAction(QObject::tr("Add Watch"));
+    if (!addWatchShortcut.isEmpty())
+    {
+        acts->addWatch->setShortcut(addWatchShortcut);
+    }
     if (!item)
     {
+        if (watchModel && watchModel->rowCount() > 0)
+        {
+            menu.addSeparator();
+            acts->removeAllWatches = menu.addAction(
+                QObject::tr("Remove All Watches"));
+        }
         return;
     }
 
-    menu.addSeparator();
+    if (item->parent() == nullptr)
+    {
+        /* Watch root: Add Watch, then duplicate / edit, then the rest. */
+        acts->duplicate = menu.addAction(QObject::tr("Duplicate Watch"));
+        acts->editWatch = menu.addAction(QObject::tr("Edit Watch"));
+        acts->editWatch->setShortcut(QKeySequence(Qt::Key_F2));
+        menu.addSeparator();
+    }
+
     acts->copyValue = menu.addAction(QObject::tr("Copy Value"));
 
     if (item->parent() != nullptr)
@@ -4847,10 +5798,13 @@ static void buildWatchContextMenu(QMenu &menu, QStandardItem *item,
     }
 
     menu.addSeparator();
-    acts->moveUp = menu.addAction(QObject::tr("Move Up"));
-    acts->moveDown = menu.addAction(QObject::tr("Move Down"));
-    acts->duplicate = menu.addAction(QObject::tr("Duplicate Watch"));
     acts->remove = menu.addAction(QObject::tr("Remove"));
+    acts->remove->setShortcut(QKeySequence(QKeySequence::Delete));
+    if (watchModel->rowCount() > 0)
+    {
+        acts->removeAllWatches = menu.addAction(
+            QObject::tr("Remove All Watches"));
+    }
 }
 
 void LuaDebuggerDialog::onWatchContextMenuRequested(const QPoint &pos)
@@ -4869,7 +5823,8 @@ void LuaDebuggerDialog::onWatchContextMenuRequested(const QPoint &pos)
 
     QMenu menu(this);
     WatchContextMenuActions acts;
-    buildWatchContextMenu(menu, item, &acts);
+    buildWatchContextMenu(menu, item, &acts, watchModel,
+                          ui->actionAddWatch->shortcut());
 
     QAction *chosen = menu.exec(watchTree->viewport()->mapToGlobal(pos));
     if (!chosen)
@@ -4880,6 +5835,22 @@ void LuaDebuggerDialog::onWatchContextMenuRequested(const QPoint &pos)
     if (chosen == acts.addWatch)
     {
         insertNewWatchRow(QString(), true);
+        return;
+    }
+    if (chosen == acts.removeAllWatches)
+    {
+        if (watchModel)
+        {
+            QList<QStandardItem *> all;
+            for (int i = 0; i < watchModel->rowCount(); ++i)
+            {
+                if (QStandardItem *r = watchModel->item(i, 0))
+                {
+                    all.append(r);
+                }
+            }
+            deleteWatchRows(all);
+        }
         return;
     }
     if (!item)
@@ -4936,6 +5907,27 @@ void LuaDebuggerDialog::onWatchContextMenuRequested(const QPoint &pos)
         return;
     }
 
+    if (chosen == acts.editWatch)
+    {
+        QTimer::singleShot(0, this, [this, item]()
+                           {
+                               if (!watchModel || !watchTree)
+                               {
+                                   return;
+                               }
+                               const QModelIndex editIx =
+                                   watchModel->indexFromItem(item);
+                               if (!editIx.isValid())
+                               {
+                                   return;
+                               }
+                               watchTree->scrollTo(editIx);
+                               watchTree->setCurrentIndex(editIx);
+                               watchTree->edit(editIx);
+                           });
+        return;
+    }
+
     if (chosen == acts.remove)
     {
         QList<QStandardItem *> del;
@@ -4956,14 +5948,13 @@ void LuaDebuggerDialog::onWatchContextMenuRequested(const QPoint &pos)
         return;
     }
 
-    const int idx = item->row();
     if (chosen == acts.duplicate)
     {
         auto *copy0 = new QStandardItem();
         auto *copy1 = new QStandardItem();
         copy0->setFlags(copy0->flags() | Qt::ItemIsEditable | Qt::ItemIsEnabled |
                         Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
-        copy1->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        copy1->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
         copy0->setText(item->text());
         {
             const QModelIndex srcRow0 = watchModel->indexFromItem(item);
@@ -4980,8 +5971,10 @@ void LuaDebuggerDialog::onWatchContextMenuRequested(const QPoint &pos)
         copy0->setData(item->data(VariableTypeRole), VariableTypeRole);
         copy0->setData(item->data(VariableCanExpandRole),
                        VariableCanExpandRole);
-        copy0->setData(QVariant(), WatchLastValueRole);
-        copy0->setData(QVariant(), WatchChildSnapRole);
+        /* The duplicate is a brand-new row: it has no baseline yet, so the
+         * first refresh will not show it as "changed". No per-item role data
+         * to clear — baselines live on the dialog, keyed by spec+level, and
+         * the copy shares the spec of its source. */
         {
             auto *ph0 = new QStandardItem();
             auto *ph1 = new QStandardItem();
@@ -4989,21 +5982,8 @@ void LuaDebuggerDialog::onWatchContextMenuRequested(const QPoint &pos)
             ph1->setFlags(Qt::ItemIsEnabled);
             copy0->appendRow({ph0, ph1});
         }
-        watchModel->insertRow(idx + 1, {copy0, copy1});
+        watchModel->insertRow(item->row() + 1, {copy0, copy1});
         refreshWatchDisplay();
-        return;
-    }
-    if (chosen == acts.moveUp && idx > 0)
-    {
-        const QList<QStandardItem *> rowItems = watchModel->takeRow(idx);
-        watchModel->insertRow(idx - 1, rowItems);
-        return;
-    }
-    if (chosen == acts.moveDown && idx >= 0 &&
-        idx < watchModel->rowCount() - 1)
-    {
-        const QList<QStandardItem *> rowItems = watchModel->takeRow(idx);
-        watchModel->insertRow(idx + 1, rowItems);
         return;
     }
 }
@@ -5061,6 +6041,17 @@ void LuaDebuggerDialog::commitWatchRootSpec(QStandardItem *item,
         return;
     }
 
+    /* Editing a spec invalidates baselines for both old and new specs:
+     * the old spec no longer applies to this row, and the new spec has
+     * never been evaluated on this row before (so the first refresh must
+     * not flag it as "changed" against an unrelated old value). */
+    const QString oldSpec = item->data(WatchSpecRole).toString();
+    if (!oldSpec.isEmpty() && oldSpec != t)
+    {
+        clearChangeBaselinesForWatchSpec(oldSpec);
+    }
+    clearChangeBaselinesForWatchSpec(t);
+
     item->setData(t, WatchSpecRole);
     item->setText(t);
     item->setData(false, WatchPendingNewRole);
@@ -5095,7 +6086,7 @@ void LuaDebuggerDialog::insertNewWatchRow(const QString &initialSpec,
     auto *row1 = new QStandardItem();
     row0->setFlags(row0->flags() | Qt::ItemIsEditable | Qt::ItemIsEnabled |
                    Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
-    row1->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+    row1->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
     row0->setData(init, WatchSpecRole);
     row0->setText(init);
     row0->setData(QString(), WatchSubpathRole);

@@ -11,6 +11,7 @@
 #define LUA_DEBUGGER_DIALOG_H
 
 #include "geometry_state_dialog.h"
+#include <QBrush>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QEventLoop>
@@ -19,6 +20,7 @@
 #include <QPair>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QModelIndex>
@@ -98,6 +100,12 @@ class LuaDebuggerDialog : public GeometryStateDialog
     void commitWatchRootSpec(QStandardItem *item, const QString &text);
 
     /**
+     * @brief Re-apply monospace and header fonts to tree panels. Call after
+     *        watch-list internal moves so styling matches the rest of the dialog.
+     */
+    void reapplyMonospacePanelFonts() { applyMonospacePanelFonts(); }
+
+    /**
      * @brief Close from Esc or programmatic reject(); queues close() so
      *        closeEvent() runs (unsaved-scripts prompt matches the window
      *        close button). The base QDialog::reject() hides via done() and
@@ -138,11 +146,10 @@ class LuaDebuggerDialog : public GeometryStateDialog
     void onClearBreakpoints();
     /** @brief Apply checkbox updates to a specific breakpoint row. */
     void onBreakpointItemChanged(QStandardItem *item);
-    /** @brief Handle single-clicks in the breakpoint list (e.g., delete icon).
-     */
-    void onBreakpointItemClicked(const QModelIndex &index);
     /** @brief Open the clicked breakpoint's file and focus the line. */
     void onBreakpointItemDoubleClicked(const QModelIndex &index);
+    /** @brief Show the Breakpoints tree context menu (Remove / Remove All). */
+    void onBreakpointContextMenuRequested(const QPoint &pos);
     /** @brief Build and show the editor context menu. */
     void onCodeViewContextMenu(const QPoint &pos);
     /** @brief Populate child variable nodes when a tree item expands. */
@@ -284,6 +291,26 @@ class LuaDebuggerDialog : public GeometryStateDialog
     /** @brief Rebuild the breakpoint list widget from persisted data. */
     void updateBreakpoints();
     /**
+     * @brief Remove the breakpoints corresponding to the given model rows.
+     *
+     * Snapshots (file, line) pairs first, then calls the debugger core,
+     * refreshes the breakpoint list, and repaints markers in any code tab
+     * whose file was touched. Duplicate row indices are ignored.
+     *
+     * @param rows Model rows in @c breakpointsModel to remove.
+     * @return True if at least one breakpoint was removed.
+     */
+    bool removeBreakpointRows(const QList<int> &rows);
+    /**
+     * @brief Remove every currently selected breakpoint row.
+     *
+     * Thin wrapper around removeBreakpointRows() used by the Del/Backspace
+     * shortcut and the "Remove" context-menu action.
+     *
+     * @return True if at least one breakpoint was removed.
+     */
+    bool removeSelectedBreakpoints();
+    /**
      * @brief Load a file into a code tab, creating the tab if necessary.
      * @param file_path Absolute or relative file path to open.
      * @return Pointer to the code view widget that now hosts the file.
@@ -326,6 +353,10 @@ class LuaDebuggerDialog : public GeometryStateDialog
     void applyCodeEditorFonts(const QFont &monoFont);
     /** @brief Base monospace for panel bodies; normal font for tree headers. */
     void applyMonospacePanelFonts();
+    /** @brief Re-sync each @c QStandardItem font in the watch model to
+     *        the panel monospace (keeps @c QStandardItem::font in line with
+     *        the tree’s @c setFont, e.g. after DnD). Preserves @c QFont::bold. */
+    void reapplyMonospaceToWatchItemFonts();
     /** @brief Index all Lua scripts from standard plugin directories. */
     void refreshAvailableScripts();
     /**
@@ -526,6 +557,155 @@ class LuaDebuggerDialog : public GeometryStateDialog
     QStringList watchExpandedSubpathsForSpec(const QString &rootSpec) const;
     /** @brief Drop map entries for watch specs no longer in the tree. */
     void pruneWatchExpansionMap();
+
+    // -----------------------------------------------------------------------
+    // Changed-value (bold + accent + transient flash) bookkeeping.
+    //
+    // Semantics: a Value cell is marked "changed" when its value at this
+    // pause differs from the value it had at the previous pause entry.
+    //
+    // Baselines rotate only on pause entry (`snapshotBaselinesOnPauseEntry`),
+    // so intra-pause refreshes (stack-frame switch, theme change, watch
+    // edit, eval, ...) leave the cue stable. Current-value maps are written
+    // by the paint helpers on every refresh and become the next pause's
+    // baselines at that pause's entry.
+    //
+    // Keys encode the stack level so `Locals.x` / `Upvalues.x` at different
+    // frames are tracked independently; `Globals.*` uses level = -1 so
+    // frame switches do not invalidate it. See `changeKey()` in the .cpp.
+    // -----------------------------------------------------------------------
+    QHash<QString /* rootKey */, QString> watchRootBaseline_;
+    QHash<QString /* rootKey */, QString> watchRootCurrent_;
+    QHash<QString /* rootKey */, QHash<QString /* childPath */, QString>>
+        watchChildBaseline_;
+    QHash<QString /* rootKey */, QHash<QString /* childPath */, QString>>
+        watchChildCurrent_;
+    QHash<QString /* variablesKey */, QString> variablesBaseline_;
+    QHash<QString /* variablesKey */, QString> variablesCurrent_;
+
+    // -----------------------------------------------------------------------
+    // Companion "visited parents" sets. Every paint of a parent's children
+    // records the parent's own change-key (variables) or path (watch) here,
+    // and the sets rotate on pause entry just like the value maps. Used as
+    // the flashNew gate so we only treat an absent child as "new" when the
+    // parent was actually expanded at the previous pause; without this a
+    // first-time expansion in the current pause would flash every child,
+    // and conversely a parent that was expanded last pause but had no
+    // children to show (function with no locals yet, empty table) could
+    // not light up the FIRST child that appears now (because no per-child
+    // baseline keys exist to prove "the parent existed in baseline"). The
+    // sets give the unambiguous per-parent expansion signal that scanning
+    // value-map prefixes cannot.
+    // -----------------------------------------------------------------------
+    QSet<QString /* variablesKey of parent */> variablesBaselineParents_;
+    QSet<QString /* variablesKey of parent */> variablesCurrentParents_;
+    QHash<QString /* rootKey */, QSet<QString /* parentPath */>>
+        watchChildBaselineParents_;
+    QHash<QString /* rootKey */, QSet<QString /* parentPath */>>
+        watchChildCurrentParents_;
+
+    /** Accent foreground used for changed values; resolved from palette. */
+    QBrush changedValueBrush_;
+    /** Transient flash background for the moment of change. */
+    QBrush changedFlashBrush_;
+    /**
+     * True only during the pause-entry refresh (handlePause). Paint helpers
+     * use this to decide whether to schedule the one-shot background flash.
+     */
+    bool isPauseEntryRefresh_ = false;
+    /**
+     * Monotonic counter that identifies one flash installation per cell.
+     * The scheduled clear-timer only clears if the cell's recorded serial
+     * still matches, so a re-flashed cell doesn't lose its new flash when
+     * an earlier clear fires.
+     */
+    qint32 flashSerial_ = 0;
+    /**
+     * Monotonic epoch for the deferred "Watch column shows —" placeholder
+     * application after a step resume. runDebuggerStep() captures the value
+     * at schedule-time; handlePause() bumps it on every pause entry so a
+     * synchronous re-pause invalidates the still-pending timer and the user
+     * never sees the value briefly flip to "—" and back. Without this the
+     * typical fast single-step produced a visible value→—→value blink in
+     * every Watch row even when the value did not change.
+     */
+    qint32 watchPlaceholderEpoch_ = 0;
+    /**
+     * The stack selection level that was active when the pause entered.
+     * handlePause() resets stackSelectionLevel to 0, so this is normally 0;
+     * keeping it as an explicit member documents the invariant and makes
+     * changeHighlightAllowed() read naturally. Walking a different frame
+     * inside the same pause yields a fundamentally different scope (often
+     * different locals entirely), so the "changed since last pause" cue
+     * stops being meaningful and is suppressed.
+     */
+    int pauseEntryStackLevel_ = 0;
+    /**
+     * Stable identity of frame 0 at pause entry, formatted as
+     * "<source>:<linedefined>". Empty before the first pause and after a
+     * debugger-off / Lua reload. Compared at every subsequent pause entry
+     * to decide whether the previous pause's Locals/Upvalues baseline
+     * still refers to the same Lua function — it does not after a call or
+     * a return, so the cue must be suppressed for that one pause.
+     */
+    QString pauseEntryFrame0Identity_;
+    /**
+     * True when the just-captured frame-0 identity equals the identity
+     * captured at the previous pause. False on the very first pause (no
+     * previous identity to compare against; baselines are empty there
+     * anyway, so suppression is harmless), and false for one pause after
+     * any call/return that changes the function at frame 0.
+     */
+    bool pauseEntryFrame0MatchesPrev_ = false;
+
+    /**
+     * @brief True when the changed-value visual cue (bold accent, optional
+     * transient flash) is meaningful for the currently displayed values.
+     *
+     * The cue requires both:
+     *   - The user is viewing the stack level that was active at pause
+     *     entry. Walking a different frame inside the same pause shows
+     *     variables from an unrelated scope; the per-(level, path)
+     *     baseline comparison would spuriously light up "new" locals or
+     *     compare against an unrelated previous-pause snapshot at the same
+     *     numeric level.
+     *   - The function at frame 0 is the same as at the previous pause
+     *     entry. Across a call or return, frame 0 is a different Lua
+     *     function entirely, and the previous pause's baseline keyed at
+     *     numeric level 0 belongs to a different scope; comparing against
+     *     it would flash every local as "changed" or "new".
+     *
+     * Globals and Globals-scoped watches are exempt from both checks at
+     * the call sites because they are anchored to level = -1 in the
+     * baseline keys and stay comparable regardless of the call stack.
+     */
+    bool changeHighlightAllowed() const
+    {
+        return stackSelectionLevel == pauseEntryStackLevel_ &&
+               pauseEntryFrame0MatchesPrev_;
+    }
+
+    /** @brief Recompute `changedValueBrush_` / `changedFlashBrush_` from the
+     *  current palette; call whenever the theme / palette changes. */
+    void refreshChangedValueBrushes();
+    /** @brief Rotate watch/variables Current → Baseline and clear Current. */
+    void snapshotBaselinesOnPauseEntry();
+    /** @brief Apply (or clear) the accent + bold on @p valueCell, and if
+     *  @p isPauseEntryRefresh and @p changed also install the one-shot
+     *  background flash. Safe to call with @p valueCell == nullptr. */
+    void applyChangedVisuals(QStandardItem *valueCell, bool changed,
+                             bool isPauseEntryRefresh);
+    /** @brief Drop all change-tracking baselines and current-value maps. */
+    void clearAllChangeBaselines();
+    /** @brief Drop baseline + current entries whose watch spec is @p spec. */
+    void clearChangeBaselinesForWatchSpec(const QString &spec);
+    /** @brief Prune baseline + current maps down to the watch specs still in
+     *  the tree; mirror of pruneWatchExpansionMap. */
+    void pruneChangeBaselinesToLiveWatchSpecs();
+    /** @brief Capture the identity of frame 0 ("<source>:<linedefined>")
+     *  and update @ref pauseEntryFrame0MatchesPrev_. Call once per pause
+     *  entry, before painting begins; see changeHighlightAllowed(). */
+    void updatePauseEntryFrameIdentity();
 };
 
 #endif // LUA_DEBUGGER_DIALOG_H

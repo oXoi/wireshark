@@ -147,6 +147,7 @@ set(LIBWIRESHARK_NONGENERATED_FILES
 	aftypes.c
 	asn1.c
 	capture_dissectors.c
+	cfile.c
 	charsets.c
 	color_filters.c
 	column.c

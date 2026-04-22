@@ -138,7 +138,7 @@ typedef struct _capture_file {
   *
   * @param cf Pointer to the capture file structure to be initialized.
   */
-extern void cap_file_init(capture_file *cf);
+WS_DLL_PUBLIC void cap_file_init(capture_file *cf);
 
 const nstime_t *cap_file_provider_get_frame_ts(struct packet_provider_data *prov, uint32_t frame_num);
 const nstime_t *cap_file_provider_get_start_ts(struct packet_provider_data *prov);

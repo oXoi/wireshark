@@ -2925,7 +2925,6 @@ set_target_properties(copy_data_files PROPERTIES FOLDER "Copy Tasks")
 # remaining ones be put into separate libraries for packet
 # processors and event processors?
 add_library(shark_common OBJECT
-	cfile.c
 	extcap_parser.c
 	file_packet_provider.c
 	sync_pipe_write.c

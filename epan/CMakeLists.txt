@@ -169,6 +169,7 @@ set(LIBWIRESHARK_NONGENERATED_FILES
 	export_object.c
 	exported_pdu.c
 	fifo_string_cache.c
+	file_packet_provider.c
 	filter_expressions.c
 	aggregation_fields.c
 	follow.c

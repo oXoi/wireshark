@@ -106,8 +106,6 @@ if(BUILD_androiddump)
 	if(EXTCAP_ANDROIDDUMP_LIBPCAP)
 		if(HAVE_LIBPCAP)
 			set(androiddump_LIBS
-				ui
-				wiretap
 				wsutil
 				${WIN_WS2_32_LIBRARY}
 				$<$<BOOL:${PCAP_FOUND}>:pcap::pcap>
@@ -248,7 +246,6 @@ if(BUILD_udpdump)
 		wsutil
 		${CMAKE_DL_LIBS}
 		${WIN_WS2_32_LIBRARY}
-		wsutil
 		writecap
 	)
 	set(udpdump_FILES

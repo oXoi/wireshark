@@ -31,8 +31,6 @@
 #include <wsutil/report_message.h>
 #include <app/application_flavor.h>
 
-#include "ui/failure_message.h"
-
 #ifdef HAVE_NETINET_IN_H
 #    include <netinet/in.h>
 #endif
@@ -82,6 +80,7 @@
 #else
     #include "wiretap/wtap.h"
     #include "wiretap/pcap-encap.h"
+    #include "ui/failure_message.h"
 #endif
 
 #include <cli_main.h>
@@ -2526,7 +2525,9 @@ int main(int argc, char *argv[]) {
         g_free(err_msg);
     }
 
+#ifndef ANDROIDDUMP_USE_LIBPCAP
     init_report_failure_message("androiddump");
+#endif
 
     extcap_conf = g_new0(extcap_parameters, 1);
 

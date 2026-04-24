@@ -24,8 +24,6 @@
 
 #include "config.h"
 
-#include <stdlib.h>	/* for strtoul() */
-
 #include <epan/packet.h>
 #include <epan/prefs.h>
 #include "packet-tcp.h"

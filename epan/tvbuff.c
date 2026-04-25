@@ -1978,6 +1978,14 @@ tvb_get_string_uint64(tvbuff_t *tvb, const unsigned offset, const unsigned lengt
 
 	ptr = ensure_contiguous_unsigned(tvb, offset, length);
 
+	if (ptr == NULL) {
+		*value = 0;
+		if (endoff) {
+			*endoff = offset;
+		}
+		return false;
+	}
+
 	switch (encoding & ENC_STRING) {
 	case ENC_STR_HEX:
 		success = ws_hexbuftou64(ptr, length, endptrptr, value);
@@ -2010,6 +2018,14 @@ tvb_get_string_uint(tvbuff_t *tvb, const unsigned offset, const unsigned length,
 	validate_single_byte_ascii_encoding(encoding);
 
 	ptr = ensure_contiguous_unsigned(tvb, offset, length);
+
+	if (ptr == NULL) {
+		*value = 0;
+		if (endoff) {
+			*endoff = offset;
+		}
+		return false;
+	}
 
 	switch (encoding & ENC_STRING) {
 	case ENC_STR_HEX:
@@ -2044,6 +2060,14 @@ tvb_get_string_uint16(tvbuff_t *tvb, const unsigned offset, const unsigned lengt
 
 	ptr = ensure_contiguous_unsigned(tvb, offset, length);
 
+	if (ptr == NULL) {
+		*value = 0;
+		if (endoff) {
+			*endoff = offset;
+		}
+		return false;
+	}
+
 	switch (encoding & ENC_STRING) {
 	case ENC_STR_HEX:
 		success = ws_hexbuftou16(ptr, length, endptrptr, value);
@@ -2076,6 +2100,14 @@ tvb_get_string_uint8(tvbuff_t *tvb, const unsigned offset, const unsigned length
 	validate_single_byte_ascii_encoding(encoding);
 
 	ptr = ensure_contiguous_unsigned(tvb, offset, length);
+
+	if (ptr == NULL) {
+		*value = 0;
+		if (endoff) {
+			*endoff = offset;
+		}
+		return false;
+	}
 
 	switch (encoding & ENC_STRING) {
 	case ENC_STR_HEX:

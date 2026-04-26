@@ -1553,7 +1553,6 @@ dissect_mka(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_)
    * The 802.1Xbx-2014 spec specifies support for MKA version 2.
    * The 802.1Xck-2018 spec specifies support for MKA version 3.
    */
-  mka_version_type = tvb_get_uint8(tvb, offset);
   if ((mka_version_type < 1) || (mka_version_type > 3)) {
     expert_add_info(pinfo, ti, &ei_unexpected_data);
   }

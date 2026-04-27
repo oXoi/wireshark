@@ -56,7 +56,6 @@
         <addaction name="actionStepOver"/>
         <addaction name="actionStepIn"/>
         <addaction name="actionStepOut"/>
-        <addaction name="actionAddWatch"/>
         <addaction name="actionSepAfterStep"/>
         <addaction name="actionOpenFile"/>
         <addaction name="actionSaveFile"/>
@@ -229,7 +228,7 @@
   </action>
   <action name="actionAddWatch">
    <property name="icon">
-    <iconset theme="system-search"/>
+    <iconset theme="list-add"/>
    </property>
    <property name="text">
     <string>Add Watch</string>

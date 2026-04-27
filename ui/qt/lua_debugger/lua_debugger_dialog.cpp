@@ -748,7 +748,7 @@ static QKeySequence luaSeqFromKeyEvent(const QKeyEvent *ke)
 
 /** @brief Sequences for context-menu labels and eventFilter (must match). */
 const QKeySequence kCtxGoToLine(QKeySequence(Qt::CTRL | Qt::Key_G));
-const QKeySequence kCtxRunToLine(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R));
+const QKeySequence kCtxRunToLine(QKeySequence(Qt::CTRL | Qt::Key_F10));
 const QKeySequence kCtxWatchEdit(Qt::Key_F2);
 const QKeySequence kCtxWatchCopyValue(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C));
 const QKeySequence kCtxWatchDuplicate(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D));
@@ -1759,6 +1759,7 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     ui->actionStepOver->setIcon(StockIcon("x-lua-debug-step-over"));
     ui->actionStepIn->setIcon(StockIcon("x-lua-debug-step-in"));
     ui->actionStepOut->setIcon(StockIcon("x-lua-debug-step-out"));
+    ui->actionRunToLine->setIcon(StockIcon("x-lua-debug-run-to-line"));
     ui->actionReloadLuaPlugins->setIcon(StockIcon("view-refresh"));
     ui->actionAddWatch->setIcon(StockIcon("list-add"));
     ui->actionFind->setIcon(StockIcon("edit-find"));
@@ -1770,6 +1771,9 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     ui->actionStepOver->setToolTip(tr("Step over (F10)"));
     ui->actionStepIn->setToolTip(tr("Step into (F11)"));
     ui->actionStepOut->setToolTip(tr("Step out (Shift+F11)"));
+    ui->actionRunToLine->setToolTip(
+        tr("Run to line (%1)")
+            .arg(kCtxRunToLine.toString(QKeySequence::NativeText)));
     ui->actionReloadLuaPlugins->setToolTip(
         tr("Reload Lua Plugins (Ctrl+Shift+L)"));
     ui->actionAddWatch->setShortcutContext(Qt::WidgetWithChildrenShortcut);
@@ -1817,6 +1821,8 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
             &LuaDebuggerDialog::onStepIn);
     connect(ui->actionStepOut, &QAction::triggered, this,
             &LuaDebuggerDialog::onStepOut);
+    connect(ui->actionRunToLine, &QAction::triggered, this,
+            &LuaDebuggerDialog::onRunToLine);
     connect(ui->actionAddWatch, &QAction::triggered, this, [this]() {
         QString fromEditor;
         if (LuaDebuggerCodeView *cv = currentCodeView())
@@ -1867,6 +1873,7 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
                 updateSaveActionState();
                 updateLuaEditorAuxFrames();
                 updateBreakpointHeaderButtonState();
+                updateContinueActionState();
             });
 
     // Breakpoints
@@ -5474,6 +5481,9 @@ void LuaDebuggerDialog::updateContinueActionState()
     ui->actionStepOver->setEnabled(allowContinue);
     ui->actionStepIn->setEnabled(allowContinue);
     ui->actionStepOut->setEnabled(allowContinue);
+    /* Run to this line additionally requires a focusable line in the editor,
+     * i.e. an active code view tab. */
+    ui->actionRunToLine->setEnabled(allowContinue && currentCodeView() != nullptr);
 }
 
 void LuaDebuggerDialog::updateWidgets()
@@ -7516,6 +7526,18 @@ void LuaDebuggerDialog::toggleBreakpointOnCodeViewLine(
             tabView->updateBreakpointMarkers();
         }
     }
+}
+
+void LuaDebuggerDialog::onRunToLine()
+{
+    LuaDebuggerCodeView *codeView = currentCodeView();
+    if (!codeView || !eventLoop)
+    {
+        return;
+    }
+    const qint32 line =
+        static_cast<qint32>(codeView->textCursor().blockNumber() + 1);
+    runToCurrentLineInPausedEditor(codeView, line);
 }
 
 void LuaDebuggerDialog::runToCurrentLineInPausedEditor(

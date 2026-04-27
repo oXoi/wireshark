@@ -197,6 +197,8 @@ class LuaDebuggerDialog : public GeometryStateDialog
     void onStepIn();
     /** @brief Step out to the caller frame. */
     void onStepOut();
+    /** @brief Run to the line under the cursor in the active code editor. */
+    void onRunToLine();
     /** @brief Enable or disable the debugger when the toggle button is clicked.
      */
     void onDebuggerToggled(bool checked);

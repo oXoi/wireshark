@@ -399,7 +399,8 @@ LuaDebuggerCodeView::LuaDebuggerCodeView(QWidget *parent)
      * behavior is otherwise non-discoverable. */
     lineNumberArea->setToolTip(
         tr("Click: add or remove breakpoint\n"
-           "Shift+click: enable or disable breakpoint without removing it"));
+           "Shift+click: on an empty line, add a disabled breakpoint;\n"
+           "on an existing breakpoint, toggle its active state"));
     syntaxHighlighter = new LuaSyntaxHighlighter(document());
 
     connect(this, &LuaDebuggerCodeView::blockCountChanged, this,

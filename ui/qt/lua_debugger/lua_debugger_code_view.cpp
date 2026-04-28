@@ -766,10 +766,6 @@ void LuaDebuggerCodeView::lineNumberAreaPaintEvent(QPaintEvent *event)
                     QColor circleColor = (state == 1)
                                              ? QColor("#DC3545")
                                              : QColor("#808080");
-                    if (pausedHere && state == 1)
-                    {
-                        circleColor.setAlpha(80);
-                    }
                     painter.setBrush(circleColor);
                     /* 1px darker rim matches the Enable-checkbox state
                      * indicator in the toolbar

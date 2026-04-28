@@ -273,6 +273,17 @@ class LuaDebuggerDialog : public GeometryStateDialog
     /** @brief Sync Variables selection when a path-style watch root is selected. */
     void onWatchCurrentItemChanged(const QModelIndex &current,
                                    const QModelIndex &previous);
+    /**
+     * @brief Adjust the left panel layout based on section expansion state.
+     *
+     * When at least one collapsible section is expanded, the splitter takes
+     * all extra vertical space. When every section is collapsed, the
+     * splitter is clamped to its content height (sum of section header
+     * heights plus inter-section handles) and a trailing stretch in
+     * leftPanelLayout absorbs the leftover, keeping the toolbar and section
+     * headers pinned to the top of the panel.
+     */
+    void updateLeftPanelStretch();
 
   private:
     Ui::LuaDebuggerDialog *ui;

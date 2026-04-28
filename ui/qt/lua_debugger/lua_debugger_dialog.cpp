@@ -263,15 +263,23 @@ styleLuaDebuggerHeaderPlusMinusButton(QToolButton *btn, int side,
     styleLuaDebuggerHeaderFittedTextButton(btn, side, titleFont, pm);
 }
 
-/** Trash icon, same @a side as ＋/−. */
+/** Trash icon, same @a side as ＋/− on macOS; 2 px smaller elsewhere. */
 static void
 styleLuaDebuggerHeaderRemoveAllButton(QToolButton *btn, int side)
 {
     btn->setToolButtonStyle(Qt::ToolButtonIconOnly);
     btn->setIcon(QIcon::fromTheme(QStringLiteral("edit-delete"),
                                   StockIcon(QStringLiteral("edit-clear"))));
-    btn->setIconSize(QSize(side, side));
-    btn->setFixedSize(side, side);
+#ifdef Q_OS_MAC
+    const int btnSide = side;
+#else
+    /* The themed trash glyph rendered at headerHeight() looks slightly too
+     * tall next to the +/-/toggle buttons on Linux/Windows; trim 4 px so the
+     * trailing button row reads as one set of equal-sized controls. */
+    const int btnSide = qMax(1, side - 4);
+#endif
+    btn->setIconSize(QSize(btnSide, btnSide));
+    btn->setFixedSize(btnSide, btnSide);
     btn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     btn->setText(QString());
 }
@@ -2386,13 +2394,80 @@ void LuaDebuggerDialog::createCollapsibleSections()
     settingsSection->setExpanded(false);
     splitter->addWidget(settingsSection);
 
-    // Set initial sizes - expanded sections get more space
     QList<int> sizes;
     int headerH = variablesSection->headerHeight();
-    sizes << 120 << 70 << 100 << headerH << 80 << headerH
-          << headerH; // Variables, Watch, Stack, Files(collapsed), Breakpoints,
-                      // Eval(collapsed), Settings(collapsed)
+    sizes << 120 << 70 << 100 << headerH << 80 << headerH << headerH;
     splitter->setSizes(sizes);
+
+    /* Tell QSplitter that every section is allowed to absorb surplus
+     * vertical space. Collapsed sections cap themselves at headerHeight via
+     * setMaximumHeight, so this stretch only takes effect for sections that
+     * are actually expanded; without it, expanding one section while the
+     * others stay collapsed leaves the leftover height unallocated and the
+     * expanded section never grows past its savedHeight. */
+    for (int i = 0; i < splitter->count(); ++i)
+        splitter->setStretchFactor(i, 1);
+
+    /* Trailing stretch in leftPanelLayout: absorbs leftover vertical space
+     * when every section is collapsed (in tandem with leftSplitter being
+     * clamped to its content height by updateLeftPanelStretch()), so the
+     * toolbar and section headers stay pinned to the top of the panel.
+     * When at least one section is expanded the stretch is set to 0 and
+     * the splitter takes all extra height. */
+    ui->leftPanelLayout->addStretch(0);
+
+    const QList<CollapsibleSection *> allSections = {
+        variablesSection, watchSection,    stackSection, breakpointsSection,
+        filesSection,     evalSection,     settingsSection};
+    for (CollapsibleSection *s : allSections)
+        connect(s, &CollapsibleSection::toggled,
+                this, &LuaDebuggerDialog::updateLeftPanelStretch);
+    updateLeftPanelStretch();
+}
+
+void LuaDebuggerDialog::updateLeftPanelStretch()
+{
+    if (!ui || !ui->leftSplitter || !ui->leftPanelLayout)
+        return;
+
+    const QList<CollapsibleSection *> sections = {
+        variablesSection, watchSection,    stackSection, breakpointsSection,
+        filesSection,     evalSection,     settingsSection};
+
+    bool anyExpanded = false;
+    int contentH = 0;
+    int counted = 0;
+    for (CollapsibleSection *s : sections)
+    {
+        if (!s)
+            continue;
+        if (s->isExpanded())
+            anyExpanded = true;
+        contentH += s->headerHeight();
+        ++counted;
+    }
+    if (counted > 1)
+        contentH += (counted - 1) * ui->leftSplitter->handleWidth();
+
+    const int splitterIdx = ui->leftPanelLayout->indexOf(ui->leftSplitter);
+    /* The trailing stretch is the last layout item appended in
+     * createCollapsibleSections(). */
+    const int stretchIdx = ui->leftPanelLayout->count() - 1;
+    if (splitterIdx < 0 || stretchIdx < 0 || splitterIdx == stretchIdx)
+        return;
+
+    if (anyExpanded)
+    {
+        ui->leftSplitter->setMaximumHeight(QWIDGETSIZE_MAX);
+        ui->leftPanelLayout->setStretch(splitterIdx, 1);
+        ui->leftPanelLayout->setStretch(stretchIdx, 0);
+    }
+    else
+    {
+        ui->leftSplitter->setMaximumHeight(contentH);
+        ui->leftPanelLayout->setStretch(splitterIdx, 0);
+        ui->leftPanelLayout->setStretch(stretchIdx, 1);
+    }
 }
 
 LuaDebuggerDialog *LuaDebuggerDialog::instance(QWidget *parent)
@@ -7942,6 +8017,11 @@ void LuaDebuggerDialog::applyDialogSettings()
     if (watchSection)
         watchSection->setExpanded(
             settings_.value(SettingsKeys::SectionWatch, true).toBool());
+    /* The setExpanded() calls above each fire the section's toggled signal
+     * which triggers updateLeftPanelStretch(). Call once more explicitly to
+     * guarantee the splitter max-height and layout stretch factors reflect
+     * the final restored expansion state regardless of signal-ordering. */
+    updateLeftPanelStretch();
     /* Match Qt enable intent to C: persist active breakpoints, then
      * enable only if the user is not in "disabled" mode. */
     ensureDebuggerEnabledForActiveBreakpoints();

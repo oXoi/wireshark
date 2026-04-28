@@ -223,6 +223,7 @@ static int hf_sip_msg_body;
 static int hf_sip_sec_mechanism;
 static int hf_sip_sec_mechanism_alg;
 static int hf_sip_sec_mechanism_ealg;
+static int hf_sip_sec_mechanism_mod;
 static int hf_sip_sec_mechanism_prot;
 static int hf_sip_sec_mechanism_spi_c;
 static int hf_sip_sec_mechanism_spi_s;
@@ -680,6 +681,7 @@ static mech_parameter_t sec_mechanism_parameters_hf_array[] =
 {
     {"alg",     MECH_PARA_STRING,    &hf_sip_sec_mechanism_alg},
     {"ealg",    MECH_PARA_STRING,    &hf_sip_sec_mechanism_ealg},
+    {"mod",     MECH_PARA_STRING,    &hf_sip_sec_mechanism_mod},
     {"prot",    MECH_PARA_STRING,    &hf_sip_sec_mechanism_prot},
     {"spi-c",   MECH_PARA_UINT,      &hf_sip_sec_mechanism_spi_c},
     {"spi-s",   MECH_PARA_UINT,      &hf_sip_sec_mechanism_spi_s},
@@ -7423,6 +7425,11 @@ void proto_register_sip(void)
         },
         { &hf_sip_sec_mechanism_ealg,
           { "ealg",  "sip.sec_mechanism.ealg",
+            FT_STRING, BASE_NONE, NULL, 0x0,
+            NULL, HFILL}
+        },
+        { &hf_sip_sec_mechanism_mod,
+          { "mod",  "sip.sec_mechanism.mod",
             FT_STRING, BASE_NONE, NULL, 0x0,
             NULL, HFILL}
         },

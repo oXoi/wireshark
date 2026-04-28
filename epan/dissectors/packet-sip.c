@@ -2435,16 +2435,15 @@ dissect_sip_sec_mechanism(tvbuff_t *tvb, packet_info* pinfo, proto_tree *tree, u
 
         /* Parse parameter and value */
         if(!tvb_find_uint8_length(tvb, current_offset + 1, length, '=', &equals_offset)){
-            /* Has value part */
-            par_name_end_offset = equals_offset;
-            /* Extract the parameter name */
-            param_name = (char*)tvb_get_string_enc(pinfo->pool, tvb, current_offset, par_name_end_offset-current_offset, ENC_UTF_8|ENC_NA);
-            /* Extract the value */
-            value = (char*)tvb_get_string_enc(pinfo->pool, tvb, equals_offset+1, semi_colon_offset-equals_offset+1, ENC_UTF_8|ENC_NA);
-        } else {
             return;
         }
 
+        /* Has value part */
+        par_name_end_offset = equals_offset;
+        /* Extract the parameter name */
+        param_name = (char*)tvb_get_string_enc(pinfo->pool, tvb, current_offset, par_name_end_offset-current_offset, ENC_UTF_8|ENC_NA);
+        /* Extract the value */
+        value = (char*)tvb_get_string_enc(pinfo->pool, tvb, equals_offset+1, semi_colon_offset-equals_offset+1, ENC_UTF_8|ENC_NA);
 
         while (sec_mechanism_parameters_hf_array[hf_index].param_name) {
             /* Protection algorithm to be used */
@@ -4519,15 +4518,12 @@ dissect_sip_common(tvbuff_t *tvb, unsigned offset, unsigned remaining_length, pa
                                                          value_offset, value_len);
                         sip_proto_set_format_text(hdr_tree, pinfo->pool, sip_element_item, tvb, offset, linelen);
 
-                        tvb_find_uint8_length(tvb, value_offset, line_end_offset - value_offset, ',', &comma_offset);
-                        while(comma_offset<line_end_offset){
-                            if(!tvb_find_uint8_length(tvb, value_offset, line_end_offset - value_offset, ',', &comma_offset)){
-                                comma_offset = line_end_offset;
-                            }
+                        do {
+                            tvb_find_uint8_length(tvb, value_offset, line_end_offset - value_offset, ',', &comma_offset);
                             security_client_tree = proto_item_add_subtree(sip_element_item, ett_sip_security_client);
                             dissect_sip_sec_mechanism(tvb, pinfo, security_client_tree, value_offset, comma_offset);
                             comma_offset = value_offset = comma_offset+1;
-                        }
+                        } while(comma_offset<line_end_offset);
 
                         break;
                     case POS_SECURITY_SERVER:
@@ -4540,15 +4536,12 @@ dissect_sip_common(tvbuff_t *tvb, unsigned offset, unsigned remaining_length, pa
                                                          value_offset, value_len);
                         sip_proto_set_format_text(hdr_tree, pinfo->pool, sip_element_item, tvb, offset, linelen);
 
-                        tvb_find_uint8_length(tvb, value_offset, line_end_offset - value_offset, ',', &comma_offset);
-                        while(comma_offset<line_end_offset){
-                            if(!tvb_find_uint8_length(tvb, value_offset, line_end_offset - value_offset, ',', &comma_offset)){
-                                comma_offset = line_end_offset;
-                            }
+                        do {
+                            tvb_find_uint8_length(tvb, value_offset, line_end_offset - value_offset, ',', &comma_offset);
                             security_client_tree = proto_item_add_subtree(sip_element_item, ett_sip_security_server);
                             dissect_sip_sec_mechanism(tvb, pinfo, security_client_tree, value_offset, comma_offset);
                             comma_offset = value_offset = comma_offset+1;
-                        }
+                        } while(comma_offset<line_end_offset);
 
                         break;
                     case POS_SECURITY_VERIFY:
@@ -4561,15 +4554,12 @@ dissect_sip_common(tvbuff_t *tvb, unsigned offset, unsigned remaining_length, pa
                                                          value_offset, value_len);
                         sip_proto_set_format_text(hdr_tree, pinfo->pool, sip_element_item, tvb, offset, linelen);
 
-                        tvb_find_uint8_length(tvb, value_offset, line_end_offset - value_offset, ',', &comma_offset);
-                        while(comma_offset<line_end_offset){
-                            if(!tvb_find_uint8_length(tvb, value_offset, line_end_offset - value_offset, ',', &comma_offset)){
-                                comma_offset = line_end_offset;
-                            }
+                        do {
+                            tvb_find_uint8_length(tvb, value_offset, line_end_offset - value_offset, ',', &comma_offset);
                             security_client_tree = proto_item_add_subtree(sip_element_item, ett_sip_security_verify);
                             dissect_sip_sec_mechanism(tvb, pinfo, security_client_tree, value_offset, comma_offset);
                             comma_offset = value_offset = comma_offset+1;
-                        }
+                        } while(comma_offset<line_end_offset);
 
                         break;
                     case POS_SESSION_ID:

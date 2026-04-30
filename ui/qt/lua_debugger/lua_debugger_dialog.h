@@ -453,6 +453,8 @@ class LuaDebuggerDialog : public GeometryStateDialog
     QToolButton *watchRemoveAllButton_ = nullptr;
     /** @brief Breakpoints section header: toggle at caret, clear all. */
     QToolButton *breakpointHeaderToggleButton_ = nullptr;
+    /** @brief Breakpoints section header: remove selected breakpoint row(s). */
+    QToolButton *breakpointHeaderRemoveButton_ = nullptr;
     QToolButton *breakpointHeaderRemoveAllButton_ = nullptr;
     /** @brief Dialog-wide QAction backing the Ctrl+Shift+F9 shortcut. */
     QAction *actionRemoveAllBreakpoints_ = nullptr;

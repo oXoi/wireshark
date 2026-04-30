@@ -1781,6 +1781,7 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
       evalInputEdit(nullptr), evalOutputEdit(nullptr), evalButton(nullptr),
       evalClearButton(nullptr), themeComboBox(nullptr), watchRemoveButton_(nullptr),
       watchRemoveAllButton_(nullptr), breakpointHeaderToggleButton_(nullptr),
+      breakpointHeaderRemoveButton_(nullptr),
       breakpointHeaderRemoveAllButton_(nullptr)
 {
     _instance = this;
@@ -1970,6 +1971,9 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     connect(breakpointsModel, &QAbstractItemModel::modelReset, this, [this]() {
         updateBreakpointHeaderButtonState();
     });
+    connect(breakpointsTree->selectionModel(),
+            &QItemSelectionModel::selectionChanged,
+            this, [this]() { updateBreakpointHeaderButtonState(); });
     updateBreakpointHeaderButtonState();
 
     QHeaderView *breakpointHeader = breakpointsTree->header();
@@ -2344,6 +2348,7 @@ void LuaDebuggerDialog::createCollapsibleSections()
     breakpointsSection->setContentWidget(breakpointsTree);
     {
         const int hdrH = breakpointsSection->titleButtonHeight();
+        const QFont hdrTitleFont = breakpointsSection->titleButtonFont();
         auto *const bpHeaderBtnRow = new QWidget(breakpointsSection);
         auto *const bpHeaderBtnLayout = new QHBoxLayout(bpHeaderBtnRow);
         bpHeaderBtnLayout->setContentsMargins(0, 0, 0, 0);
@@ -2360,6 +2365,17 @@ void LuaDebuggerDialog::createCollapsibleSections()
         bpTglBtn->setStyleSheet(kLuaDbgHeaderToolButtonStyle);
         bpTglBtn->setEnabled(false);
         bpTglBtn->setToolTip(tr("No breakpoints"));
+        QToolButton *const bpRemBtn = new QToolButton(bpHeaderBtnRow);
+        breakpointHeaderRemoveButton_ = bpRemBtn;
+        styleLuaDebuggerHeaderPlusMinusButton(bpRemBtn, hdrH, hdrTitleFont);
+        bpRemBtn->setText(kLuaDbgHeaderMinus);
+        bpRemBtn->setAutoRaise(true);
+        bpRemBtn->setStyleSheet(kLuaDbgHeaderToolButtonStyle);
+        bpRemBtn->setEnabled(false);
+        bpRemBtn->setToolTip(
+            tr("Remove Breakpoint (%1)")
+                .arg(QKeySequence(QKeySequence::Delete)
+                         .toString(QKeySequence::NativeText)));
         QToolButton *const bpRemAllBtn = new QToolButton(bpHeaderBtnRow);
         breakpointHeaderRemoveAllButton_ = bpRemAllBtn;
         styleLuaDebuggerHeaderRemoveAllButton(bpRemAllBtn, hdrH);
@@ -2372,9 +2388,12 @@ void LuaDebuggerDialog::createCollapsibleSections()
                     kCtxRemoveAllBreakpoints.toString(
                         QKeySequence::NativeText)));
         bpHeaderBtnLayout->addWidget(bpTglBtn);
+        bpHeaderBtnLayout->addWidget(bpRemBtn);
         bpHeaderBtnLayout->addWidget(bpRemAllBtn);
         connect(bpTglBtn, &QToolButton::clicked, this,
                 &LuaDebuggerDialog::toggleAllBreakpointsActiveFromHeader);
+        connect(bpRemBtn, &QToolButton::clicked, this,
+                [this]() { removeSelectedBreakpoints(); });
         connect(bpRemAllBtn, &QToolButton::clicked, this,
                 &LuaDebuggerDialog::onClearBreakpoints);
         breakpointsSection->setHeaderTrailingWidget(bpHeaderBtnRow);
@@ -6323,6 +6342,13 @@ void LuaDebuggerDialog::updateBreakpointHeaderButtonState()
                 luaDbgBreakpointHeaderIconForMode(editorFont, mode, side, dpr);
         }
         breakpointHeaderToggleButton_->setIcon(bpHeaderIconCache_[modeIdx]);
+    }
+    if (breakpointHeaderRemoveButton_)
+    {
+        QItemSelectionModel *const sm =
+            breakpointsTree ? breakpointsTree->selectionModel() : nullptr;
+        breakpointHeaderRemoveButton_->setEnabled(
+            sm && !sm->selectedRows().isEmpty());
     }
     if (breakpointHeaderRemoveAllButton_)
     {
